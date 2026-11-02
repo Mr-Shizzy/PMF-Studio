@@ -38,6 +38,7 @@ def run():
                 ("C-Intro movie", lambda: jobs.cintro(dict(movie=src, out=work + "/ci.pmf"), tools, lambda l: None), work + "/ci.pmf"),
                 ("AT3 sound", lambda: jobs.at3(dict(sound=src, out=work + "/s.at3", kbps=64, lufs=-12, keep=False, loop=True), tools, lambda l: None), work + "/s.at3"),
                 ("PMF to MP4", lambda: jobs.extract(dict(src=work + "/gb.pmf", out=work + "/gb.mp4", sound_too=True), tools, lambda l: None), work + "/gb.mp4"),
+                ("smaller game movie", lambda: jobs.shrink(dict(src=work + "/gb.pmf", out=work + "/shrunk", amount="much"), tools, lambda l: None), work + "/shrunk/gb.pmf"),
                 ("AT3 to WAV", lambda: jobs.extract_sound(dict(sound=work + "/s.at3", out=work + "/s.wav", fmt="wav"), tools, lambda l: None), work + "/s.wav"),
                 ("AT3 to MP3", lambda: jobs.extract_sound(dict(sound=work + "/s.at3", out=work + "/s.mp3", fmt="mp3", mp3kbps="192 kbps"), tools, lambda l: None), work + "/s.mp3"),
             ]

@@ -94,6 +94,15 @@ finish_job()
 snap("gameboot-built")
 pmf = a.vars["out"].get()
 
+# 2b. Shrink game movies: the gameboot just built, made smaller for real
+a.show("shrink")
+a.vars["src"].set(pmf)
+a.vars["out"].set(os.path.join(SAMPLES, "Shrunk movies"))
+pump(1.5)
+a.run_shrink()
+finish_job()
+snap("shrink")
+
 # 3. EBOOT icon page (nothing chosen yet)
 a.show("icon")
 pump(0.5)

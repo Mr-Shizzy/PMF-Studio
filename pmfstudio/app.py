@@ -671,8 +671,78 @@ class App(tk.Tk):
             self.note("This sound replaces the icon movie's own sound. They never play together, and they share 512 KB, so a long sound means a smaller picture.", warn=True, parent=self.sep_holder)
 
     def page_shrink(self):
-        self.heading("Shrink game movies", "Make a game's own movie files smaller.")
-        self.note("Coming soon.")
+        self.heading("Shrink game movies", "Make a game's own movie files (.pmf) smaller, so the game takes less room. They keep their names, picture size and length.")
+        f = tk.Frame(self.main, bg=T.bg)
+        f.pack(fill="x", pady=3)
+        self.label_cell(f, "Movies")
+        self.vars["src"] = tk.StringVar()
+        ttk.Entry(f, textvariable=self.vars["src"]).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ttk.Button(f, text="A movie", command=lambda: self.pick_movies(False)).pack(side="left", padx=(0, 6))
+        ttk.Button(f, text="A folder", command=lambda: self.pick_movies(True)).pack(side="left")
+        self.shrink_info = tk.Label(self.main, text="Pick one movie, or a whole folder of them.", bg=T.bg, fg=T.muted, font=(FONT, 10), anchor="w", justify="left", wraplength=S(700))
+        self.shrink_info.pack(fill="x", pady=(0, 6))
+        f = tk.Frame(self.main, bg=T.bg)
+        f.pack(fill="x", pady=(6, 3))
+        tk.Label(f, text="How small", width=14, anchor="w", bg=T.bg, fg=T.ink, font=(FONT, 10)).pack(side="left")
+        self.vars["amount"] = tk.StringVar(value="much")
+        Segmented(f, [("smaller", "A bit smaller"), ("much", "About half"), ("tiny", "Much smaller")], self.vars["amount"], self.shrink_refresh).pack(side="left")
+        self.tick("sound_small", "Make the sound smaller too", self.shrink_refresh)
+        self.sound_holder = tk.Frame(self.main, bg=T.bg)
+        self.sound_holder.pack(fill="x")
+        self.row("out", "Save to folder", "dir", initial=self.out_default("Shrunk movies"))
+        self.note("Your originals are never changed: the smaller movies go to the folder above with the same names. "
+                  "Always try one of them in your game before you use them all.")
+        self.footer("Shrink", self.run_shrink, bar=False)
+        self.vars["src"].trace_add("write", lambda *a: self.shrink_typed())
+        self.shrink_job = None
+        self.shrink_refresh()
+
+    def pick_movies(self, folder):
+        cur = self.vars["src"].get()
+        init = cur if cur and os.path.isdir(cur) else (os.path.dirname(cur) if cur and os.path.isdir(os.path.dirname(cur)) else settings.output_dir(self.settings))
+        p = filedialog.askdirectory(initialdir=init) if folder else filedialog.askopenfilename(initialdir=init, filetypes=[("PMF movies", "*.pmf"), ("All files", "*.*")])
+        if p:
+            self.vars["src"].set(os.path.normpath(p))
+
+    def shrink_typed(self):
+        if self.shrink_job:
+            self.after_cancel(self.shrink_job)
+        self.shrink_job = self.after(500, self.shrink_refresh)
+
+    def shrink_refresh(self):
+        """the sound choice appears with its tick; the line under the movies says how many there are and what they should come to"""
+        from pmfkit import shrink
+        self.shrink_job = None
+        if not self.alive(getattr(self, "sound_holder", None)):
+            return
+        for w in self.sound_holder.winfo_children():
+            w.destroy()
+        if self.vars["sound_small"].get():
+            f = tk.Frame(self.sound_holder, bg=T.bg)
+            f.pack(fill="x", pady=(2, 4))
+            tk.Label(f, text="Sound quality", width=14, anchor="w", bg=T.bg, fg=T.ink, font=(FONT, 10)).pack(side="left")
+            if "sound_kbps" not in self.vars:
+                self.vars["sound_kbps"] = tk.StringVar(value="96 kbps")
+            Segmented(f, [(k, k) for k in ("128 kbps", "96 kbps", "64 kbps")], self.vars["sound_kbps"], self.shrink_refresh).pack(side="left")
+            tk.Label(self.sound_holder, text="Lower is smaller. A sound that is already lower than this is left alone.", bg=T.bg, fg=T.muted, font=(FONT, 9), anchor="w").pack(fill="x")
+        path = self.vars["src"].get().strip()
+        if not path:
+            self.shrink_info.configure(text="Pick one movie, or a whole folder of them.", fg=T.muted)
+        elif not os.path.exists(path):
+            self.shrink_info.configure(text="Can't find that movie or folder.", fg=BAD)
+        else:
+            sound = int(self.vars["sound_kbps"].get().split()[0]) if self.vars["sound_small"].get() else None
+            try:
+                count, total, after = shrink.estimate(path, shrink.RATIOS[self.vars["amount"].get()], sound)
+            except OSError:
+                count = 0
+            if not count:
+                self.shrink_info.configure(text="There are no .pmf movies there.", fg=BAD)
+            else:
+                self.shrink_info.configure(text="%d movie%s, %s. After shrinking: about %s." % (count, "" if count == 1 else "s", self.fmt(total), self.fmt(after)), fg=T.ink)
+
+    def run_shrink(self):
+        self.start(jobs.shrink, [("src", "a movie or a folder of movies"), ("out", "the folder to save in")])
 
     def page_at3(self):
         self.heading("AT3 Tools", "Make a new AT3 sound, shrink one that came with a game, or turn an AT3 into a WAV or MP3.")
@@ -797,6 +867,10 @@ class App(tk.Tk):
                 "Movies longer than 2.5 seconds need your own opening_plugin.rco, and it must be a decrypted one.\n\n"
                 "C-Intro\n"
                 "A movie for the C-Intro plugin. There is no size limit.\n\n"
+                "Shrink game movies\n"
+                "Makes the .pmf movies of a game smaller so the game takes less room. Pick one movie or a whole folder. Each smaller movie keeps its name, picture size and length, "
+                "and goes to another folder: your originals are never changed. The sound is kept exactly as it is, unless you tick Make the sound smaller too. "
+                "Try one movie in your game before you use them all.\n\n"
                 "EBOOT icon\n"
                 "The small movie that plays in the XMB when you highlight a game. It's saved into a copy of the game's EBOOT. "
                 "The movie's own sound is used, unless you tick Use a different sound. The movie and sound together must fit in 512 KB.\n\n"
@@ -810,7 +884,7 @@ class App(tk.Tk):
                 "Opens a PMF, or any video or sound, so you can check it before it goes on your PSP.")
         t = tk.Text(self.main, bg=T.bg, fg=T.ink, font=(FONT, 10), relief="flat", wrap="word", spacing3=2)
         t.insert("1.0", text)
-        for line in ("Getting started", "Gameboot", "C-Intro", "EBOOT icon", "AT3 Tools", "Extract", "Player"):
+        for line in ("Getting started", "Gameboot", "C-Intro", "Shrink game movies", "EBOOT icon", "AT3 Tools", "Extract", "Player"):
             i = t.search(line + "\n", "1.0")
             t.tag_add("h", i, i + " lineend")
         t.tag_configure("h", font=(FONT, 10, "bold"), spacing1=6)
@@ -878,7 +952,7 @@ class App(tk.Tk):
         if v.get("sep") and not v.get("sound"):
             messagebox.showinfo("PMF Studio", "Choose the sound file, or untick Use a different sound.")
             return
-        if os.path.exists(v["out"]) and not messagebox.askyesno("PMF Studio", "%s already exists. Replace it?" % os.path.basename(v["out"])):
+        if self.mode != "shrink" and os.path.exists(v["out"]) and not messagebox.askyesno("PMF Studio", "%s already exists. Replace it?" % os.path.basename(v["out"])):
             return
         try:
             tools = self.tools()
@@ -995,7 +1069,7 @@ class App(tk.Tk):
                 self.size_bar.set(min(1.0, size / limit))
         if self.settings["open_folder"]:
             try:
-                os.startfile(os.path.dirname(os.path.abspath(data)))
+                os.startfile(os.path.abspath(data) if self.mode == "shrink" else os.path.dirname(os.path.abspath(data)))
             except (OSError, AttributeError):
                 pass
 

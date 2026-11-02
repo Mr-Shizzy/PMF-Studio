@@ -350,6 +350,21 @@ def cmd_mux(a):
     print("wrote %s (%d bytes)" % (a.output, len(pmf)))
 
 
+def cmd_shrink(a):
+    from . import shrink
+    a.ffmpeg = tool(a.ffmpeg)
+    a.atracdenc = tool(a.atracdenc) if a.atracdenc else None
+    ratio = shrink.RATIOS[a.amount] if a.amount in shrink.RATIOS else float(a.amount)
+    results = shrink.shrink(a.input, a.output, a.ffmpeg, a.atracdenc, ratio, a.sound_kbps, a.bframes)
+    done = [r for r in results if not r.note.startswith("failed")]
+    failed = len(results) - len(done)
+    before, after = sum(r.before for r in done), sum(r.after for r in done)
+    print("%d movie%s: %.1f MB -> %.1f MB%s" % (len(done), "" if len(done) == 1 else "s", before / 1e6, after / 1e6,
+                                               ", %d could not be used" % failed if failed else ""))
+    if not done:
+        fail("none of the movies could be made smaller")
+
+
 def cmd_info(a):
     P, v, au, packs = demux(open(a.pmf, "rb").read())
     frames = (P.last_pts - P.first_pts) / 3003
@@ -508,6 +523,15 @@ def main(argv=None):
     bt.add_argument("--remove", nargs="+", metavar="SECTION", help="empty these sections, e.g. SND0")
     bt.add_argument("--title", help="XMB title (PARAM.SFO TITLE)")
     bt.set_defaults(fn=cmd_pbp_set)
+    sh = sub.add_parser("shrink", help="make a game's PMF movies smaller (a .pmf, or a folder of them; same names inside the output folder)")
+    sh.add_argument("input", help="a .pmf file, or a folder with .pmf files")
+    sh.add_argument("-o", "--output", required=True, help="the new .pmf, or the folder for the new movies")
+    sh.add_argument("--ffmpeg", default="ffmpeg")
+    sh.add_argument("--atracdenc", help="path to atracdenc (only needed with --sound-kbps)")
+    sh.add_argument("--amount", default="much", help="smaller (keep 75%% of the picture bitrate), much (50%%), tiny (30%%), or a number such as 0.4")
+    sh.add_argument("--sound-kbps", type=int, help="encode the sound again at this ATRAC3plus bitrate (default: keep the sound as it is)")
+    sh.add_argument("--bframes", type=int, default=1, help="B-frames in the new picture (default 1, as in the game movies we looked at)")
+    sh.set_defaults(fn=cmd_shrink)
     i = sub.add_parser("info", help="show header info of a pmf")
     i.add_argument("pmf")
     i.set_defaults(fn=cmd_info)

@@ -140,6 +140,23 @@ def extract(v, tools, emit):
         raise cli.BuildError(str(e))
 
 
+def shrink(v, tools, emit):
+    """Game movies made smaller. v["src"] is a movie or a folder of movies, v["out"] the folder for the new ones (same file names)."""
+    src, out = os.path.abspath(v["src"]), os.path.abspath(v["out"])
+    if os.path.isdir(src):
+        if out == src or out.startswith(src.rstrip("\\/") + os.sep):
+            raise cli.BuildError("Save the smaller movies in a different folder, not in the folder you picked. PMF Studio never replaces your originals.")
+        dest = out
+    else:
+        dest = os.path.join(out, os.path.basename(src))
+        if os.path.normcase(dest) == os.path.normcase(src):
+            raise cli.BuildError("Save the smaller movie in a different folder. PMF Studio never replaces your originals.")
+    argv = ["shrink", src, "-o", dest, "--ffmpeg", tools["ffmpeg"], "--amount", v.get("amount", "much")]
+    if v.get("sound_small"):
+        argv += ["--atracdenc", tools["atracdenc"], "--sound-kbps", str(int(v.get("sound_kbps", "96 kbps").split()[0]))]
+    run(argv, emit)
+
+
 def extract_sound(v, tools, emit):
     from pmfkit import extract as ex
     try:

@@ -6,7 +6,7 @@ PMF Studio is one part of the coming **PSP CTF Studio**.
 <p align="center"><img src="docs/screenshots/gameboot-long-movie.png" alt="Gameboot page: choosing the part of a long movie that fits" width="720"></p>
 
 More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/screenshots/eboot-icon.png),
-[AT3 Tools](docs/screenshots/at3-tools.png), [Extract](docs/screenshots/extract.png), [Player](docs/screenshots/player.png),
+[Shrink game movies](docs/screenshots/shrink.png), [AT3 Tools](docs/screenshots/at3-tools.png), [Extract](docs/screenshots/extract.png), [Player](docs/screenshots/player.png),
 [light theme](docs/screenshots/gameboot-light.png). The pictures were made with made-up sample files.
 
 ## What it does
@@ -15,6 +15,8 @@ More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/s
   and lengthens the boot with your own `opening_plugin.rco`.
 - **C-Intro**: a movie for the C-Intro boot plugin.
 - **EBOOT icon**: changes the icon movie, the sound, the pictures and the title in a copy of a game's EBOOT.
+- **Shrink game movies**: makes a game's own `.pmf` movies smaller (one movie or a whole folder): same names, picture size and
+  length, the picture re-encoded at a lower bitrate, the sound kept as it is or shrunk too. Every result is checked before it is saved.
 - **AT3 Tools**: make an AT3 from any sound, shrink an AT3 from a game, or turn an AT3 into a WAV or MP3.
 - **Extract**: takes any PMF apart into an MP4 (and its sound as AT3 and WAV).
 - **Player**: plays PMF movies and sounds inside the program, with full screen.
@@ -30,7 +32,7 @@ Get the zip from the Releases page, unzip anywhere, run `PMF Studio.exe`. Window
 ## Status
 
 Beta. Everything was checked on one PSP (firmware 6.61 with ARK-5 and CXMB). Not tested yet on a PSP: movies for the C-Intro
-plugin. Not built yet: *Shrink game movies*. The size limits come from tests on that PSP and may differ on other setups.
+plugin, and smaller game movies inside a game (they play and pass the checks here; whether a given game accepts them is up to the game, so try one first). The size limits come from tests on that PSP and may differ on other setups.
 
 ## Running from the source
 
