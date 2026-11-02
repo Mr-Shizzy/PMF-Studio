@@ -14,7 +14,7 @@ from . import VERSION, STAGE, REPO, jobs, settings, updater
 from . import paths
 from .paths import app_dir, find_tool
 from .theme import T, S, set_scale, set_theme, mix
-from .widgets import Check, ProgressBar, ScrollArea, Segmented, Slider, TrimBar, STATE_COLORS, clock
+from .widgets import Check, FitPicker, ProgressBar, ScrollArea, Segmented, Slider, TrimBar, STATE_COLORS, clock
 from pmfkit import fit
 from pmfkit import cli
 from pmfkit.cli import BuildError, probe_seconds
@@ -328,10 +328,13 @@ class App(tk.Tk):
         """how a movie that isn't the PSP's shape is made to fit"""
         f = tk.Frame(parent or self.main, bg=T.bg)
         f.pack(fill="x", pady=3)
-        tk.Label(f, text="Picture shape", width=14, anchor="w", bg=T.bg, fg=T.ink, font=(FONT, 10)).pack(side="left")
+        tk.Label(f, text="Picture shape", width=14, anchor="nw", bg=T.bg, fg=T.ink, font=(FONT, 10)).pack(side="left", anchor="n", pady=(S(8), 0))
         self.vars["fit"] = tk.StringVar(value="crop")
-        Segmented(f, [("crop", "Fill"), ("pad", "Black bars"), ("stretch", "Stretch")], self.vars["fit"]).pack(side="left")
-        tk.Label(f, text="Fill crops the edges. Black bars keep the whole picture.", bg=T.bg, fg=T.muted, font=(FONT, 9)).pack(side="left", padx=12)
+        col = tk.Frame(f, bg=T.bg)
+        col.pack(side="left", fill="x", expand=True)
+        FitPicker(col, self.vars["fit"]).pack(anchor="w")
+        tk.Label(col, text="The PSP screen is wide. Fill crops the edges. Black bars keep the whole picture. Stretch squeezes it to fit.", bg=T.bg, fg=T.muted,
+                 font=(FONT, 9), justify="left", anchor="w", wraplength=S(620)).pack(anchor="w", pady=(S(4), 0))
 
     # ---------- choosing the part of a long movie ----------
     def trim_panel(self, target, parent=None):

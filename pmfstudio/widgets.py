@@ -1,4 +1,5 @@
 """Hand-drawn controls (sliders, round icon buttons, tick boxes, segmented choice) so the window looks current, not like old Windows."""
+import math
 import tkinter as tk
 
 from .theme import T, S, mix
@@ -205,6 +206,93 @@ class Segmented(tk.Frame):
         for v, lab in self.items.items():
             on = self.var.get() == v
             lab.configure(bg=T.accent if on else T.bg, fg=T.on_accent if on else T.ink, font=(FONT, 10, "bold" if on else "normal"))
+
+
+_SHAPE_CACHE = {}
+
+
+def _example_pixel(u, v):
+    """a made-up 4:3 picture (sky, sun, hill, white edge line); u and v run 0..1 across it. The round sun shows squashing."""
+    if u < 0.05 or u > 0.95 or v < 0.06 or v > 0.94:
+        return (245, 245, 245)
+    if ((u - 0.70) * 4) ** 2 + ((v - 0.32) * 3) ** 2 < 0.30:
+        return (255, 205, 60)
+    if v > 0.70 + 0.07 * math.sin(u * 7):
+        return (70, 170, 90)
+    return (int(80 + 60 * v), int(150 + 70 * v), 255)
+
+
+def _shape_image(kind, w):
+    """what a 4:3 picture looks like on the PSP's wide screen with each choice: 'source' (as it is), 'crop', 'pad', 'stretch'"""
+    key = (kind, w)
+    if key in _SHAPE_CACHE:
+        return _SHAPE_CACHE[key]
+    h = round(w * 9 / 16)
+    sw, sh = (w * 3 // 4, h) if kind == "source" else (w, h)
+    img = tk.PhotoImage(width=sw, height=sh)
+    rows = []
+    for y in range(sh):
+        row = []
+        for x in range(sw):
+            r = g = b = n = 0
+            for dy in (0.25, 0.75):                                   # 2 x 2 samples per pixel: smoother edges
+                for dx in (0.25, 0.75):
+                    px, py = x + dx, y + dy
+                    if kind == "source":
+                        c = _example_pixel(px / sw, py / sh)
+                    elif kind == "crop":                              # picture as wide as the screen, top and bottom cut off
+                        c = _example_pixel(px / w, 0.5 + (py - h / 2) / (w * 3 / 4))
+                    elif kind == "pad":                               # picture as tall as the screen, black bars at the sides
+                        u = 0.5 + (px - w / 2) / (h * 4 / 3)
+                        c = _example_pixel(u, py / h) if 0 <= u <= 1 else (0, 0, 0)
+                    else:                                             # stretch: pulled to the screen's shape
+                        c = _example_pixel(px / w, py / h)
+                    r, g, b, n = r + c[0], g + c[1], b + c[2], n + 1
+            row.append("#%02x%02x%02x" % (r // n, g // n, b // n))
+        rows.append("{" + " ".join(row) + "}")
+    img.put(" ".join(rows))
+    _SHAPE_CACHE[key] = img
+    return img
+
+
+class FitPicker(tk.Frame):
+    """'Picture shape': the example picture, then one small picture per choice showing what you get (Fill / Black bars / Stretch)."""
+
+    def __init__(self, parent, variable, command=None):
+        super().__init__(parent, bg=T.bg)
+        self.var, self.command, self.cards = variable, command, {}
+        w = S(104)
+        src = tk.Frame(self, bg=T.bg)
+        src.pack(side="left", padx=(0, S(6)))
+        tk.Label(src, image=_shape_image("source", w), bd=0, bg=T.line, padx=1, pady=1).pack(pady=(S(4), S(2)))
+        tk.Label(src, text="Your picture", bg=T.bg, fg=T.muted, font=(FONT, 9)).pack()
+        tk.Label(self, text="→", bg=T.bg, fg=T.muted, font=(FONT, 16)).pack(side="left", padx=S(4))
+        for value, name in (("crop", "Fill"), ("pad", "Black bars"), ("stretch", "Stretch")):
+            card = tk.Frame(self, bg=T.line, padx=2, pady=2, cursor="hand2")
+            card.pack(side="left", padx=S(4))
+            inner = tk.Frame(card, bg=T.bg, padx=S(4), pady=S(4))
+            inner.pack()
+            pic = tk.Label(inner, image=_shape_image(value, w), bd=0, bg=T.line, padx=1, pady=1)
+            pic.pack()
+            lab = tk.Label(inner, text=name, bg=T.bg, font=(FONT, 10))
+            lab.pack(pady=(S(3), 0))
+            for widget in (card, inner, pic, lab):
+                widget.bind("<Button-1>", lambda e, v=value: self.choose(v))
+            self.cards[value] = (card, inner, lab)
+        self.refresh()
+
+    def choose(self, v):
+        if self.var.get() != v:
+            self.var.set(v)
+            self.refresh()
+            if self.command:
+                self.command()
+
+    def refresh(self):
+        for v, (card, inner, lab) in self.cards.items():
+            on = self.var.get() == v
+            card.configure(bg=T.accent if on else T.line)
+            lab.configure(fg=T.accent if on else T.ink, font=(FONT, 10, "bold" if on else "normal"))
 
 
 class ScrollArea(tk.Frame):
