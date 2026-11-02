@@ -2,6 +2,7 @@
 import contextlib
 import io
 import os
+import shutil
 import tempfile
 
 from pmfkit import cli
@@ -92,6 +93,13 @@ PICTURES = (("icon0", "--icon0", 144, 80), ("pic1", "--pic1", 480, 272), ("pic0"
 def icon(v, tools, emit):
     """Changes a copy of an EBOOT: the icon movie (with its own sound or a different one), the pictures, the title. Anything left empty stays as it is."""
     work = tempfile.mkdtemp(prefix="pmfstudio_")
+    try:
+        _icon(v, tools, emit, work)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _icon(v, tools, emit, work):
     final = ["pbp", "set", v["eboot"], "-o", v["out"]]
     changes = 0
     if v.get("sound") and not v.get("movie"):
@@ -131,13 +139,22 @@ def icon(v, tools, emit):
 
 def extract(v, tools, emit):
     from pmfkit import extract as ex
+    stem = os.path.splitext(v["out"])[0]
+    mine = [p for p in (v["out"], stem + ".at3", stem + ".wav") if not os.path.exists(p)]       # files this run creates: removed again if it fails
+    work = tempfile.mkdtemp(prefix="pmfstudio_")
     try:
         pmf = ex.load_pmf(v["src"])
-        work = tempfile.mkdtemp(prefix="pmfstudio_")
         cli.PROGRESS.window(0.0, 1.0)
         ex.extract(pmf, tools["ffmpeg"], v["out"], work, bool(v.get("sound_too")), emit)
-    except (ValueError, OSError) as e:
+    except (ValueError, OSError, cli.BuildError) as e:
+        for p in mine:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
         raise cli.BuildError(str(e))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def shrink(v, tools, emit):

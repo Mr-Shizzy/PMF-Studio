@@ -214,19 +214,23 @@ def _check(original, new, same_sound):
 def shrink(path, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframes=1, log=print):
     """a movie or a folder of movies -> out (a file for a movie, a folder for a folder; same file names inside).
     -> list of ShrinkResult. A movie that fails is reported and skipped; the others go on."""
-    from .cli import PROGRESS, BuildError
+    from .cli import PROGRESS, BuildError, Cancelled
     movies = find_movies(path)
     if not movies:
         raise BuildError("There are no .pmf movies there.")
     single = os.path.isfile(path)
     results = []
     for i, (full, rel) in enumerate(movies):
+        from .cli import check_cancel
+        check_cancel()
         dst = out if single else os.path.join(out, rel)
         os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
         PROGRESS.window(i / len(movies), (i + 1) / len(movies))
         PROGRESS.report(0.0, "Movie %d of %d: %s" % (i + 1, len(movies), os.path.basename(full)) if len(movies) > 1 else "Reading the movie…")
         try:
             r = shrink_one(full, dst, ffmpeg, atracdenc, ratio, sound_kbps, bframes, log)
+        except Cancelled:
+            raise
         except (ValueError, BuildError, OSError) as e:
             log("%s: %s" % (rel, e))
             r = ShrinkResult(full, dst, os.path.getsize(full), 0, "failed: %s" % e)

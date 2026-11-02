@@ -9,6 +9,7 @@ import ctypes
 import os
 import queue
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -782,3 +783,4 @@ class Player:
         if self.audio:
             self.audio.close()
             self.audio = None
+        shutil.rmtree(self.work, ignore_errors=True)               # the decoded picture and sound files

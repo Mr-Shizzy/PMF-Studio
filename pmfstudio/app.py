@@ -2,16 +2,19 @@
 import ctypes
 import math
 import os
+import platform
 import queue
 import shutil
+import sys
 import tempfile
 import threading
+import traceback
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
 from . import VERSION, STAGE, REPO, jobs, settings, updater
-from . import paths
+from . import paths, preflight
 from .paths import app_dir, find_tool
 from .theme import T, S, set_scale, set_theme, mix
 from .widgets import Check, FitPicker, ProgressBar, ScrollArea, Segmented, Slider, TrimBar, STATE_COLORS, clock
@@ -207,9 +210,21 @@ class App(tk.Tk):
                                    % (lines, os.path.join(app_dir(), "tools")))
 
     def quit_app(self):
+        if self.busy:
+            if not messagebox.askyesno("PMF Studio", "PMF Studio is still working. Stop and quit?"):
+                return
+            cli.cancel()                                           # the helper programs are ended, not left running in the background
+            if getattr(self, "worker", None):
+                self.worker.join(8)
         if self.player:
             self.player.close()
         self.destroy()
+
+    def stop_job(self):
+        if self.busy:
+            cli.cancel()
+            self.stop_btn.configure(state="disabled")
+            self.status.configure(text="Stopping\u2026", fg=T.muted)
 
     # ---------- window ----------
     def style(self):
@@ -583,6 +598,7 @@ class App(tk.Tk):
         self.go.pack(side="right")
         self.ring = Ring(f)
         self.ring.pack(side="right", padx=10)
+        self.stop_btn = ttk.Button(f, text="Stop", command=self.stop_job)          # appears only while a job is running
 
     def out_default(self, name):
         return os.path.join(settings.output_dir(self.settings), name)
@@ -964,6 +980,9 @@ class App(tk.Tk):
             v = tk.BooleanVar(value=self.settings[key])
             self.vars[key] = v
             Check(self.main, text, v, lambda k=key, v=v: self.set_option(k, v.get())).pack(anchor="w", pady=4)
+        v = tk.BooleanVar(value=self.settings["low_priority"])
+        self.vars["low_priority"] = v
+        Check(self.main, "Keep the PC responsive while working (helper programs run at lower priority)", v, lambda: self.set_option("low_priority", v.get())).pack(anchor="w", pady=4)
         self.row("output_dir", "Save files in", "dir", initial=settings.output_dir(self.settings))
         self.vars["output_dir"].trace_add("write", lambda *a: self.set_option("output_dir", settings.to_stored(self.vars["output_dir"].get())))
         self.note("Everything PMF Studio saves stays in its own folder unless you choose another one. If you move or rename the PMF Studio folder, it still finds its files.")
@@ -971,6 +990,40 @@ class App(tk.Tk):
         for name, (path, text) in getattr(self, "tool_status", {}).items():
             line = "%s: %s" % (name, ("ready" if path and text and "won't" not in text else text) if path else text)
             tk.Label(self.main, text=line + ("   (%s)" % path if path else ""), bg=T.bg, fg=T.ink if path and "won't" not in text else BAD, font=(FONT, 9), anchor="w").pack(fill="x")
+
+        f = tk.Frame(self.main, bg=T.bg)
+        f.pack(fill="x", pady=(14, 0))
+        ttk.Button(f, text="Copy diagnostics", command=self.copy_diagnostics).pack(side="left")
+        tk.Label(f, text="Text for a bug report: program and helper versions, Windows, what went wrong last. It leaves out your folder names and user name.",
+                 bg=T.bg, fg=T.muted, font=(FONT, 9), wraplength=S(520), justify="left").pack(side="left", padx=12)
+
+    def diagnostics_text(self):
+        def scrub(text):
+            for real, shown in ((paths.app_dir(), "<program>"), (os.path.expanduser("~"), "<home>"), (os.environ.get("USERNAME", ""), "<user>")):
+                if real and len(real) > 2:
+                    text = text.replace(real, shown).replace(real.replace("\\", "/"), shown)
+            return text
+        lines = ["PMF Studio %s %s (%s)" % (VERSION, STAGE, "exe" if getattr(sys, "frozen", False) else "from source"),
+                 "Windows: %s" % platform.platform(), "Python %s, Tk %s, screen scale %.2f" % (platform.python_version(), tk.TkVersion, T.scale)]
+        for name, (path, text) in getattr(self, "tool_status", {}).items():
+            lines.append("%s: %s" % (name, text if path else "not found"))
+        try:
+            folder = settings.output_dir(self.settings)
+            anc = preflight.nearest_existing(folder)
+            lines.append("Free space where files are saved: %s" % (preflight.fmt(shutil.disk_usage(anc).free) if anc else "unknown"))
+        except OSError:
+            pass
+        ram = preflight.free_ram()
+        lines.append("Free memory: %s" % (preflight.fmt(ram) if ram else "unknown"))
+        lines.append("Settings: theme %s, lower priority %s, updates on startup %s" % ("dark" if self.settings["dark"] else "light", self.settings["low_priority"], self.settings["auto_update"]))
+        trace = getattr(self, "last_trace", "")
+        lines.append("Last unexpected error:\n" + scrub(trace[-1500:]) if trace else "No unexpected errors in this run.")
+        return "\n".join(lines)
+
+    def copy_diagnostics(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.diagnostics_text())
+        messagebox.showinfo("PMF Studio", "Copied. Paste it into your bug report.")
 
     def change_look(self):
         self.set_option("dark", self.vars["look"].get() == "dark")
@@ -1005,6 +1058,17 @@ class App(tk.Tk):
         if v.get("sep") and not v.get("sound"):
             messagebox.showinfo("PMF Studio", "Choose the sound file, or untick Use a different sound.")
             return
+        try:
+            preflight.run(self.mode, v, self.tools())
+        except BuildError as e:
+            messagebox.showinfo("PMF Studio", str(e))
+            return
+        if self.mode == "shrink":
+            from pmfkit import shrink as shrinkmod
+            same = sum(os.path.exists(os.path.join(v["out"], rel if os.path.isdir(v["src"]) else os.path.basename(v["src"]))) for _, rel in shrinkmod.find_movies(v["src"]))
+            if same and not messagebox.askyesno("PMF Studio", "%d movie%s with the same name%s already in that folder. Replace %s?" % (
+                    same, "" if same == 1 else "s", "" if same == 1 else "s", "it" if same == 1 else "them")):
+                return
         if self.mode != "shrink" and os.path.exists(v["out"]) and not messagebox.askyesno("PMF Studio", "%s already exists. Replace it?" % os.path.basename(v["out"])):
             return
         try:
@@ -1014,7 +1078,11 @@ class App(tk.Tk):
             messagebox.showerror("PMF Studio", str(e))
             return
         self.busy = True
+        cli.CANCEL.clear()
+        cli.PRIORITY = 0x4000 if self.settings.get("low_priority", True) and os.name == "nt" else 0       # below normal: the PC stays usable
         self.go.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
+        self.stop_btn.pack(side="right", padx=(0, 6))
         self.ring.start()
         self.status.configure(text="Working\u2026", fg=T.muted)
         cli.PROGRESS.reset()
@@ -1030,13 +1098,20 @@ class App(tk.Tk):
 
         def work():
             try:
+                if os.name == "nt":
+                    ctypes.windll.kernel32.SetThreadExecutionState(0x80000001)    # the PC doesn't go to sleep in the middle of a long job
                 func(v, tools, lambda line: self.q.put(("log", line)))
                 self.q.put(("done", v["out"]))
             except BuildError as e:
                 self.q.put(("error", str(e)))
             except Exception as e:                      # keep the window alive whatever happens
-                self.q.put(("error", "%s: %s" % (type(e).__name__, e)))
-        threading.Thread(target=work, daemon=True).start()
+                self.last_trace = traceback.format_exc()
+                self.q.put(("error", "Something unexpected went wrong (%s: %s).\n\nOptions > Copy diagnostics gives you text to send with a bug report." % (type(e).__name__, e)))
+            finally:
+                if os.name == "nt":
+                    ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+        self.worker = threading.Thread(target=work, daemon=True)
+        self.worker.start()
 
     def pump(self):
         latest = None
@@ -1104,6 +1179,12 @@ class App(tk.Tk):
             self.progress_pct.configure(text="100%")
         self.ring.stop()
         self.go.configure(state="normal")
+        self.stop_btn.pack_forget()
+        if kind == "error" and cli.CANCEL.is_set():
+            self.progress.set(self.progress.value, T.muted)
+            self.progress_label.configure(text="Stopped", fg=T.muted)
+            self.status.configure(text="Stopped. Nothing half-finished was kept.", fg=T.muted)
+            return
         if kind == "error":
             self.status.configure(text="Stopped", fg=BAD)
             messagebox.showerror("PMF Studio", data)
@@ -1181,9 +1262,11 @@ class App(tk.Tk):
 
 
 def main():
-    work = os.path.join(app_dir(), "temp")                 # working files stay beside the program too, not in the Windows temp folder
-    shutil.rmtree(work, ignore_errors=True)
-    if settings.usable(work):
+    base = os.path.join(app_dir(), "temp")                 # working files stay beside the program too, not in the Windows temp folder
+    work = os.path.join(base, "run%d" % os.getpid())       # one folder per running program: a second PMF Studio never deletes the first one's files
+    paths.sweep_temp(base, os.getpid())                    # and folders left behind by a program that was killed are removed
+    if settings.usable(base):
+        os.makedirs(work, exist_ok=True)
         tempfile.tempdir = work
     else:                                                  # a read-only folder: use the system's temp folder instead of failing
         work = None

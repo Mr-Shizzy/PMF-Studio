@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 from . import atrac3p
 from .demux import demux, duration_seconds
@@ -32,6 +33,31 @@ def fail(message):
 
 
 NOWND = 0x08000000 if os.name == "nt" else 0          # helper programs run without a console window popping up
+PRIORITY = 0                                           # the window sets 0x4000 (below normal) so a long job doesn't make the PC sluggish
+
+
+class Cancelled(BuildError):
+    """the user pressed Stop"""
+
+
+CANCELLED_TEXT = "Stopped."
+CANCEL = threading.Event()
+ACTIVE = []                                            # helper programs running right now
+
+
+def cancel():
+    """stop what is running: nothing new starts, and the helper programs that are running are ended"""
+    CANCEL.set()
+    for p in list(ACTIVE):
+        try:
+            p.terminate()
+        except OSError:
+            pass
+
+
+def check_cancel():
+    if CANCEL.is_set():
+        raise Cancelled(CANCELLED_TEXT)
 
 
 def tool(path):
@@ -94,9 +120,13 @@ _DONE = re.compile(rb"(\d+)%\s*done")
 def run(cmd, env=None, track=None):
     """Runs a helper program. track = ("ffmpeg", seconds of output) or ("atracdenc", None) reports its progress as it goes."""
     cmd = list(cmd)
+    check_cancel()
     if track and track[0] == "ffmpeg":
         cmd[1:1] = ["-progress", "pipe:1", "-nostats"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, creationflags=NOWND)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, creationflags=NOWND | PRIORITY)
+    ACTIVE.append(proc)
+    if CANCEL.is_set():                                # Stop was pressed while it was starting
+        proc.terminate()
     tail = b""
     while True:
         chunk = proc.stdout.read1(4096)
@@ -112,6 +142,9 @@ def run(cmd, env=None, track=None):
             if m:
                 PROGRESS.report(int(m[-1]) / 100.0)
     code = proc.wait()
+    if proc in ACTIVE:
+        ACTIVE.remove(proc)
+    check_cancel()
     if code:
         fail("command failed (%d): %s\n%s" % (code, " ".join(cmd), tail.decode("latin1")[-2000:]))
 
@@ -177,9 +210,18 @@ def encode_audio(ffmpeg, atracdenc, src, out_oma, seconds, lufs=DEFAULT_LUFS, kb
 
 def make_pmf(a):
     """video (+ audio) -> pmf bytes. a.limit_bytes (optional) is a size budget the video bitrate is lowered to fit."""
+    own = not a.workdir
+    work = a.workdir or tempfile.mkdtemp(prefix="pmfkit_")
+    try:
+        return _make_pmf(a, work)
+    finally:
+        if own:                                        # the picture and sound files can be tens of MB each: never leave them behind
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def _make_pmf(a, work):
     a.ffmpeg = tool(a.ffmpeg)
     a.atracdenc = tool(a.atracdenc) if a.atracdenc else None
-    work = a.workdir or tempfile.mkdtemp(prefix="pmfkit_")
     os.makedirs(work, exist_ok=True)
     es = os.path.join(work, "video.264")
     opt = dict(ICON1) if a.icon1 else {}
@@ -374,8 +416,17 @@ def cmd_info(a):
 
 
 def cmd_snd0(a):
-    ffmpeg, ad = tool(a.ffmpeg), tool(a.atracdenc)
+    own = not a.workdir
     work = a.workdir or tempfile.mkdtemp(prefix="pmfkit_")
+    try:
+        _cmd_snd0(a, work)
+    finally:
+        if own:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def _cmd_snd0(a, work):
+    ffmpeg, ad = tool(a.ffmpeg), tool(a.atracdenc)
     os.makedirs(work, exist_ok=True)
     seconds = a.seconds                                   # no length cap: only the 512,000-byte budget matters (notes section 53)
     oma = os.path.join(work, "snd0.oma")

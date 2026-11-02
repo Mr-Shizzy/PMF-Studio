@@ -9,8 +9,8 @@ import os
 from .paths import app_dir, default_output
 
 FILE = "PMF Studio settings.json"
-DEFAULTS = {"auto_update": True, "dark": True, "open_folder": True, "output_dir": ""}
-KINDS = {"auto_update": bool, "dark": bool, "open_folder": bool, "output_dir": str}
+DEFAULTS = {"auto_update": True, "dark": True, "open_folder": True, "output_dir": "", "low_priority": True}
+KINDS = {"auto_update": bool, "dark": bool, "open_folder": bool, "output_dir": str, "low_priority": bool}
 
 
 def path():
@@ -29,10 +29,16 @@ def load():
 
 
 def save(s):
+    tmp = path() + ".tmp"
     try:
-        json.dump({k: v for k, v in s.items() if k in DEFAULTS}, open(path(), "w", encoding="utf8"), indent=2)
+        with open(tmp, "w", encoding="utf8") as f:                # written beside it, then swapped in: a crash can't leave half a file
+            json.dump({k: v for k, v in s.items() if k in DEFAULTS}, f, indent=2)
+        os.replace(tmp, path())
     except OSError:
-        pass
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def to_stored(folder):

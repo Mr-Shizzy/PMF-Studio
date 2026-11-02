@@ -10,6 +10,42 @@ def app_dir():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def pid_alive(pid):
+    """is a program with this process number still running (when that can't be told: yes, so nothing is deleted by mistake)"""
+    try:
+        import ctypes
+        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))         # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.windll.kernel32.GetLastError() != 87                   # 87 = no such process
+        code = ctypes.c_ulong()
+        ok = ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(h)
+        return not ok or code.value == 259                                       # 259 = still running
+    except (AttributeError, OSError, ValueError):
+        return True
+
+
+def sweep_temp(base, me):
+    """base\\run<number> folders belong to one running program each. Remove those whose program has ended (a crash, a power cut, a
+    killed process) and anything else loose in base that is over a day old. Never touches the folder of a program that is still running."""
+    import shutil
+    import time
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return
+    for n in names:
+        full = os.path.join(base, n)
+        try:
+            if n.startswith("run") and n[3:].isdigit():
+                if int(n[3:]) != me and not pid_alive(int(n[3:])):
+                    shutil.rmtree(full, ignore_errors=True)
+            elif time.time() - os.path.getmtime(full) > 86400:
+                shutil.rmtree(full, ignore_errors=True) if os.path.isdir(full) else os.remove(full)
+        except OSError:
+            pass
+
+
 def asset(name):
     """a picture shipped with the program (pmfstudio/assets; the release packs the same folder), or None if it is missing"""
     p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", name)
