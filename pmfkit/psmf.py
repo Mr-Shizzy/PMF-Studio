@@ -24,6 +24,8 @@ class Params:
     first_pts: int = 90000
     video_buffer_kib: int = 495     # P-STD buffer: 495 (0012 files) or 251 (0014 files)
     audio: bool = False
+    streams: int = 1                # stream entries in the header: 1 video + the sound tracks (007 From Russia With Love: 5 = 4 tracks)
+    audio_tracks: int = 1           # sound tracks to write when audio is True (one entry each; fields below grow by 16 bytes per track)
 
 
 def pstd(kib):
@@ -40,27 +42,29 @@ def build_header(p):
     h[4:8] = p.version.encode()
     h[8:12] = (2048).to_bytes(4, "big")
     h[12:16] = p.stream_bytes.to_bytes(4, "big")
-    a = 16 if p.audio else 0
+    t = max(1, p.audio_tracks) if p.audio else 0
+    a = 16 * t
     h[0x50:0x54] = (0x3E + a).to_bytes(4, "big")
     h[0x54:0x5A] = p.first_pts.to_bytes(6, "big")
     h[0x5A:0x60] = p.last_pts.to_bytes(6, "big")
     h[0x60:0x64] = MUX_RATE.to_bytes(4, "big")
     h[0x64:0x68] = CLOCK.to_bytes(4, "big")
-    h[0x68] = 2 if p.audio else 1
+    h[0x68] = 1 + t
     h[0x69] = 1
     h[0x6A:0x6E] = (0x24 + a).to_bytes(4, "big")
     h[0x6E:0x74] = p.first_pts.to_bytes(6, "big")
     h[0x74:0x7A] = p.last_pts.to_bytes(6, "big")
     h[0x7A:0x7C] = (1).to_bytes(2, "big")
     h[0x7C:0x80] = (0x12 + a).to_bytes(4, "big")
-    h[0x80:0x82] = (2 if p.audio else 1).to_bytes(2, "big")
+    h[0x80:0x82] = (1 + t).to_bytes(2, "big")
     h[0x82:0x84] = b"\xe0\x00"
     h[0x84:0x86] = pstd(p.video_buffer_kib).to_bytes(2, "big")
     h[0x8E] = p.width // 16
     h[0x8F] = p.height // 16
-    if p.audio:
-        h[0x92:0x96] = b"\xbd\x00\x20\x04"
-        h[0xA0:0xA2] = b"\x02\x02"
+    for j in range(t):                                  # one entry per sound track: bd <track> 20 04, ten zero bytes, 02 02
+        o = 0x92 + 16 * j
+        h[o:o + 4] = bytes([0xBD, j, 0x20, 0x04])
+        h[o + 14:o + 16] = b"\x02\x02"
     return bytes(h)
 
 
@@ -68,6 +72,7 @@ def parse_header(h):
     """Inverse of build_header for the fields it writes (used by tests and tools)."""
     if h[:4] != b"PSMF":
         raise ValueError("not a PSMF file")
+    streams = int.from_bytes(h[0x80:0x82], "big")
     return Params(
         stream_bytes=int.from_bytes(h[12:16], "big"),
         last_pts=int.from_bytes(h[0x5A:0x60], "big"),
@@ -75,5 +80,7 @@ def parse_header(h):
         version=h[4:8].decode("ascii"),
         first_pts=int.from_bytes(h[0x54:0x5A], "big"),
         video_buffer_kib=int.from_bytes(h[0x84:0x86], "big") & 0x1FFF,
-        audio=int.from_bytes(h[0x80:0x82], "big") == 2,
+        audio=streams >= 2,
+        streams=streams,
+        audio_tracks=max(1, streams - 1),
     )

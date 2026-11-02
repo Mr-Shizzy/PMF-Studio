@@ -5,13 +5,14 @@ space for the same look). The sound is kept byte for byte, or encoded again at a
 (same number of pictures, same length, same sound) before it is written; a movie that would not get smaller is copied unchanged.
 
 Not seen in a real game yet: only the output's structure is checked (notes: shrinking game movies)."""
+import hashlib
 import os
 import re
 import shutil
 import tempfile
 
 from . import atrac3p, snd0
-from .demux import demux, duration_seconds
+from .demux import demux, demux_all, duration_seconds
 from .extract import load_pmf
 from .h264 import split_access_units
 from .mux import mux, HEADER_KIB
@@ -53,28 +54,43 @@ class Survey:
 
 
 def survey(path, samples=3):
+    """a movie, a folder of movies, or a game's disc image (.cso / .iso) -> Survey"""
+    from . import umdimage
+    if umdimage.is_image(path):
+        return umdimage.survey_image(path, samples)
     movies = find_movies(path)
     if not movies:
         return Survey()
     sizes = [os.path.getsize(p) for p, _ in movies]
     picked = sorted(range(len(movies)), key=lambda i: -sizes[i])[:samples]
-    vbits = abits = secs = asecs = abytes = weight = 0
+    raws = []
     for i in picked:
         try:
-            raw = load_pmf(movies[i][0])
-            _, video, audio, _ = demux(raw)
+            raws.append(load_pmf(movies[i][0]))
         except (ValueError, OSError):
             continue
+    return survey_stats(raws, len(movies), sum(sizes))
+
+
+def survey_stats(raws, count, total):
+    """the Survey of `count` movies taking `total` bytes, read from a few of them (their bytes in raws)"""
+    vbits = abits = secs = asecs = abytes = weight = 0
+    for raw in raws:
+        try:
+            _, video, tracks, _ = demux_all(raw)
+        except ValueError:
+            continue
+        audio = tracks[min(tracks)] if tracks else b""
         seconds = max(duration_seconds(video, audio), 0.1)
         vbits += len(video) * 8
-        abits += len(audio) * 8
+        abits += len(audio) * 8                          # the bitrate is per track; the share of the file counts every track
         asecs += seconds if audio else 0
         secs += seconds
-        abytes += len(audio)
+        abytes += sum(len(t) for t in tracks.values())
         weight += len(raw)
     if not secs:
-        return Survey(len(movies), sum(sizes))
-    return Survey(len(movies), sum(sizes), vbits / secs / 1000, abits / max(asecs, 0.1) / 1000, abytes / max(weight, 1))
+        return Survey(count, total)
+    return Survey(count, total, vbits / secs / 1000, abits / max(asecs, 0.1) / 1000, abytes / max(weight, 1))
 
 
 def predict(info, ratio, sound_kbps=None):
@@ -98,6 +114,21 @@ def _reencode(ffmpeg, es_in, es_out, seconds, kbps, gop, bframes, bufsize):
     cli.run(cmd, track=("ffmpeg", seconds))
 
 
+def _sound_bytes(sound):
+    """the audio bytes a muxed movie holds for one stream, a list of streams, or none"""
+    if sound is None:
+        return 0
+    return sum(len(s.frames) * s.unit_bytes for s in (sound if isinstance(sound, list) else [sound]))
+
+
+def _equal_length(streams):
+    """several sound tracks encoded separately: the same frame size, and cut to the shortest (they differ by a frame at most)"""
+    if len({s.frame_bytes for s in streams}) != 1:
+        raise ValueError("The sound tracks came out in different qualities.")
+    n = min(len(s.frames) for s in streams)
+    return [atrac3p.Atrac3pStream(s.frames[:n], s.param) for s in streams]
+
+
 def _new_sound(ffmpeg, atracdenc, audio_es, work, kbps):
     """the sound encoded again at kbps (decoded to a WAV first, like everywhere else); None when that wouldn't be smaller"""
     from . import cli
@@ -116,9 +147,23 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
     Raises ValueError with a plain message when the file can't be used. -> ShrinkResult"""
     from .cli import PROGRESS
     raw = load_pmf(src)
-    params, video, audio, _ = demux(raw)
+    params, video, tracks, _ = demux_all(raw)
     if not video:
         raise ValueError("There is no picture in that movie.")
+    order = sorted(tracks)                                   # a movie can carry several sound tracks (one per language)
+    audio = tracks[order[0]] if order else b""
+    if order and order != list(range(len(order))):
+        raise ValueError("The sound tracks in this movie are numbered in an unusual way, so it was left as it is.")
+    if len(order) > 1:
+        shapes = set()
+        for t in order:
+            try:
+                st = atrac3p.from_units(tracks[t])
+            except ValueError:
+                raise ValueError("One of the sound tracks in this movie can't be read, so it was left as it is.")
+            shapes.add((st.frame_bytes, len(st.frames)))
+        if len(shapes) != 1:
+            raise ValueError("The sound tracks in this movie differ in quality or length, so it was left as it is.")
     aus = split_access_units(video)
     seconds = duration_seconds(video, audio)
     before = len(raw)
@@ -128,17 +173,23 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
     if keep_picture and not (audio and sound_kbps and atracdenc):
         shutil.copyfile(src, dst) if os.path.abspath(src) != os.path.abspath(dst) else None
         return ShrinkResult(src, dst, before, before, "nothing to change: copied as it is")
-    version = params.version if params.version in HEADER_KIB else "0012"
+    version = params.version if params.version in ("0012", "0013", "0014", "0015") else "0012"        # the game's own version label is kept (the layout is the same in all of them)
     style = "A" if params.video_buffer_kib >= 400 else "B"
     work = tempfile.mkdtemp(prefix="pmfshrink_")
     try:
         es_in, es_out = os.path.join(work, "in.264"), os.path.join(work, "out.264")
         open(es_in, "wb").write(video)
-        new_audio = None
+        new_audio = None                                     # the shrunk sound tracks: one stream, or a list when the movie has several
         if audio and sound_kbps and atracdenc:
             with PROGRESS.stage(0.0, 0.2, "Shrinking the sound…"):
-                new_audio = _new_sound(ffmpeg, atracdenc, audio, work, sound_kbps)
-        sound = new_audio if new_audio is not None else (atrac3p.from_units(audio) if audio else None)
+                redone = [_new_sound(ffmpeg, atracdenc, tracks[t], work, sound_kbps) for t in order]
+            if any(r is not None for r in redone):
+                new_audio = _equal_length([r if r is not None else atrac3p.from_units(tracks[t]) for r, t in zip(redone, order)])
+        if new_audio is not None:
+            sound = new_audio
+        else:
+            sound = [atrac3p.from_units(tracks[t]) for t in order] if len(order) > 1 else (atrac3p.from_units(audio) if audio else None)
+        first_new = new_audio[0] if isinstance(new_audio, list) else new_audio
         gop = 59
         bufsize = int(kbps * 1.5)
         best = None
@@ -162,12 +213,14 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
                     raise
                 bufsize = int(bufsize * 0.6)             # a picture over 65,535 bytes can't be indexed: a smaller buffer caps picture sizes
                 continue
-            want = before * (ratio if not (sound is not None and new_audio is not None) else min(1.0, ratio + 0.05))
+            # the picture is asked to keep `ratio` of its size; the sound (all tracks) and the container stay as they are, or as the new sound is
+            fixed = before - len(video) - sum(len(t) for t in tracks.values()) + _sound_bytes(sound)
+            want = fixed + len(video) * ratio
             if best is None or len(out) < len(best):
                 best = out
             if len(out) <= want * 1.08 or attempt == 3:
                 break
-            kbps = max(FLOOR_KBPS, int(kbps * want / len(out) * 0.97))      # too big: lower the bitrate and try again
+            kbps = max(FLOOR_KBPS, int(kbps * (len(video) * ratio) / max(len(out) - fixed, 1) * 0.97))      # too big: lower the bitrate and try again
             bufsize = int(kbps * 1.5)
         if best is None:
             raise ValueError("Couldn't make that movie smaller.")
@@ -181,7 +234,9 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
         PROGRESS.report(1.0)
         note = "picture kept" if keep_picture else "picture %d -> %d kbps" % (old_kbps, kbps)
         if new_audio is not None:
-            note += ", sound %d -> %d kbps" % (atrac3p.from_units(audio).kbps, new_audio.kbps)
+            note += ", sound %d -> %d kbps" % (atrac3p.from_units(audio).kbps, first_new.kbps)
+        if len(order) > 1:
+            note += " (%d sound tracks kept)" % len(order)
         return ShrinkResult(src, dst, before, len(best), note)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -197,8 +252,13 @@ def count_pictures(video_es):
 
 def _check(original, new, same_sound):
     """None when the new movie matches the old one (same pictures, same length, same sound); otherwise what is different"""
-    _, v0, a0, _ = demux(original)
-    p1, v1, a1, _ = demux(new)
+    _, v0, t0, _ = demux_all(original)
+    _, v1, t1, _ = demux_all(new)
+    if sorted(t0) != sorted(t1):
+        return "the number of sound tracks changed"
+    a0, a1 = (t0[min(t0)] if t0 else b""), (t1[min(t1)] if t1 else b"")
+    if same_sound and t0 != t1:
+        return "the sound changed"
     n0, n1 = count_pictures(v0), count_pictures(v1)
     if not n0 - 1 <= n1 <= n0:                       # a game's movie can end with a cut-off last picture that nothing can decode
         return "%d pictures instead of %d" % (n1, n0)
@@ -211,6 +271,15 @@ def _check(original, new, same_sound):
     return None
 
 
+def _digest(path):
+    """a fingerprint of a file's whole content (size included), to tell copies of one movie apart from different movies"""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return (os.path.getsize(path), h.hexdigest())
+
+
 def shrink(path, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframes=1, log=print):
     """a movie or a folder of movies -> out (a file for a movie, a folder for a folder; same file names inside).
     -> list of ShrinkResult. A movie that fails is reported and skipped; the others go on."""
@@ -219,7 +288,7 @@ def shrink(path, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframe
     if not movies:
         raise BuildError("There are no .pmf movies there.")
     single = os.path.isfile(path)
-    results = []
+    results, seen = [], {}
     for i, (full, rel) in enumerate(movies):
         from .cli import check_cancel
         check_cancel()
@@ -227,6 +296,20 @@ def shrink(path, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframe
         os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
         PROGRESS.window(i / len(movies), (i + 1) / len(movies))
         PROGRESS.report(0.0, "Movie %d of %d: %s" % (i + 1, len(movies), os.path.basename(full)) if len(movies) > 1 else "Reading the movie…")
+        key = _digest(full) if len(movies) > 1 else None
+        if key in seen:
+            # a game often lists one movie under several names (one per language) that all point at the same data on the disc:
+            # the copies are shrunk once and the result is copied, so they stay identical
+            lead = seen[key]
+            if lead.after and os.path.exists(lead.dst):
+                shutil.copyfile(lead.dst, dst)
+                r = ShrinkResult(full, dst, lead.before, lead.after, "same movie as %s: %s" % (os.path.basename(lead.src), lead.note))
+                log("%s: %s -> %s KB (same movie as %s)" % (rel, r.before // 1000, r.after // 1000, os.path.basename(lead.src)))
+            else:
+                r = ShrinkResult(full, dst, lead.before, 0, "failed: same movie as %s, which could not be used" % os.path.basename(lead.src))
+                log("%s: same movie as %s, which could not be used" % (rel, os.path.basename(lead.src)))
+            results.append(r)
+            continue
         try:
             r = shrink_one(full, dst, ffmpeg, atracdenc, ratio, sound_kbps, bframes, log)
         except Cancelled:
@@ -235,9 +318,13 @@ def shrink(path, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframe
             log("%s: %s" % (rel, e))
             r = ShrinkResult(full, dst, os.path.getsize(full), 0, "failed: %s" % e)
             results.append(r)
+            if key is not None:
+                seen[key] = r
             continue
         log("%s: %s -> %s KB (%s)" % (rel, r.before // 1000, r.after // 1000, r.note))
         results.append(r)
+        if key is not None:
+            seen[key] = r
     PROGRESS.window(0.0, 1.0)
     PROGRESS.report(1.0)
     return results

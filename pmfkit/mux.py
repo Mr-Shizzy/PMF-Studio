@@ -185,8 +185,17 @@ def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead):
 
 class _AudioFeeder:
     def __init__(self, audio, style, pts_base=AUDIO_PTS_BASE, second_floor=AUDIO2_FLOOR):
+        """audio: one Atrac3pStream, or a list of them for a movie with several sound tracks (languages): the tracks must have the
+        same frame size and the same length. Retail files (007 From Russia With Love) send each audio pack once per track, one after the
+        other with the same time stamp, the track number as first byte of the payload."""
         self.pts_base, self.second_floor = pts_base, second_floor
-        self.es = b"".join(audio.units())
+        tracks = list(audio) if isinstance(audio, (list, tuple)) else [audio]
+        if len({(t.unit_bytes, len(t.frames)) for t in tracks}) != 1:
+            raise ValueError("all sound tracks must have the same frame size and the same length")
+        self.ntracks = len(tracks)
+        self.ess = [b"".join(t.units()) for t in tracks]
+        self.es = self.ess[0]
+        audio = tracks[0]
         self.U = audio.unit_bytes
         self.ext = PROFILES[style]["audio_ext"]
         self.g = 0
@@ -205,23 +214,33 @@ class _AudioFeeder:
         i = -(-need // self.U) - 1                      # last unit that must have been decoded
         return int(self.pts_base + i * AUDIO_UNIT_TICKS)
 
-    def build(self, with_ext):
+    def build_group(self, with_ext):
+        """the next audio packs: one per sound track, same position in the sound and same time stamp -> list of entries"""
         hl = 8 if with_ext else 5
         take = min(len(self.es) - self.g, PACK - 14 - 9 - hl - 4)
         ptr = (-self.g) % self.U
-        e = _Entry()
-        e.kind, e.gop, e.gop_start, e.cum_end, e.floor, e.pos = "a", None, False, 0, None, None
-        if ptr < take:
-            payload = b"\x00\x00" + ptr.to_bytes(2, "big") + self.es[self.g:self.g + take]
-            pts = int(self.pts_base + ((self.g + ptr) // self.U) * AUDIO_UNIT_TICKS)
-            fields = ts(2, pts) + (self.ext if with_ext else b"")
-            e.body = pes(0xBD, 0x81 if with_ext else 0x80, fields, payload, PACK - 14)
-        else:                                    # no unit header starts in this pack (stream tail): no PTS, ptr 0xFFFF
-            payload = b"\x00\x00\xff\xff" + self.es[self.g:self.g + take]
-            e.body = pes(0xBD, 0x00, b"", payload, PACK - 14)
+        group = []
+        for track, es in enumerate(self.ess):
+            e = _Entry()
+            e.kind, e.gop, e.gop_start, e.cum_end, e.floor, e.pos = "a", None, False, 0, None, None
+            if ptr < take:
+                payload = bytes([track, 0]) + ptr.to_bytes(2, "big") + es[self.g:self.g + take]
+                pts = int(self.pts_base + ((self.g + ptr) // self.U) * AUDIO_UNIT_TICKS)
+                fields = ts(2, pts) + (self.ext if with_ext else b"")
+                e.body = pes(0xBD, 0x81 if with_ext else 0x80, fields, payload, PACK - 14)
+            else:                                    # no unit header starts in this pack (stream tail): no PTS, ptr 0xFFFF
+                payload = bytes([track, 0]) + b"\xff\xff" + es[self.g:self.g + take]
+                e.body = pes(0xBD, 0x00, b"", payload, PACK - 14)
+            group.append(e)
         self.g += take
         self.count += 1
-        return e
+        return group
+
+    def build(self, with_ext):
+        """one track only (the streaming muxer)"""
+        if self.ntracks != 1:
+            raise ValueError("the streaming muxer writes one sound track")
+        return self.build_group(with_ext)[0]
 
 
 def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, header_kib=None, strict=True,
@@ -231,15 +250,19 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
     version = PSMF header version ("0012" gameboot-safe); style = stream style "A"/"B" (see PROFILES)."""
     if style not in PROFILES:
         raise ValueError("unknown stream style %r (use A or B)" % style)
-    if audio is not None and audio.unit_bytes > MAX_AUDIO_UNIT and strict:
+    n_tracks = len(audio) if isinstance(audio, (list, tuple)) else (0 if audio is None else 1)
+    if isinstance(audio, (list, tuple)) and not audio:
+        audio = None
+    first = audio[0] if isinstance(audio, (list, tuple)) else audio
+    if first is not None and first.unit_bytes > MAX_AUDIO_UNIT and strict:
         raise ValueError("audio frames are %d bytes (%.0f kbps): too big to fit one pack, the PSP plays no sound "
                          "(hardware test: 352 kbps silent, 128/96 kbps fine); use 320 kbps or lower"
-                         % (audio.frame_bytes, audio.kbps))
+                         % (first.frame_bytes, first.kbps))
     problems = psp_problems(video_es, allow_b)
     if problems and strict:
         raise ValueError("this video will not play on a real PSP:\n  - " + "\n  - ".join(problems))
     if header_kib is None:
-        header_kib = HEADER_KIB[version]
+        header_kib = HEADER_KIB.get(version, PROFILES[style]["video_kib"])        # 0013/0015: the header carries the same number as the stream's own system header
     video_kib = PROFILES[style]["video_kib"]
     aus = split_access_units(video_es)
     for a in aus:
@@ -270,8 +293,13 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
             ext_pending = ext_pending or e.gop_start
             vi += 1
         else:
-            e, t = feeder.build(ext_pending), ta
+            group = feeder.build_group(ext_pending)
             ext_pending = False
+            for e in group[:-1]:                                     # sound tracks 2, 3...: the packs right after the first, in track order
+                order.append(e)
+                scrs.append(int(ta))
+                ta = ta + SCR_STEP
+            e, t = group[-1], ta
         order.append(e)
         scrs.append(int(t))
         cur = t
@@ -299,7 +327,7 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
         stream += pk
     hdr = psmf.build_header(psmf.Params(
         stream_bytes=len(stream), last_pts=FIRST_PTS + FRAME * len(aus), width=width, height=height,
-        version=version, first_pts=FIRST_PTS, video_buffer_kib=header_kib, audio=audio is not None))
+        version=version, first_pts=FIRST_PTS, video_buffer_kib=header_kib, audio=audio is not None, audio_tracks=max(1, n_tracks)))
     return hdr + bytes(stream)
 
 
@@ -323,6 +351,10 @@ def mux_file(es_path, out_path, audio=None, version="0012", style="B", width=480
     from .h264 import iter_access_units
     if style not in PROFILES:
         raise ValueError("unknown stream style %r (use A or B)" % style)
+    if isinstance(audio, (list, tuple)):
+        if len(audio) > 1:
+            raise ValueError("the streaming muxer writes one sound track")
+        audio = audio[0] if audio else None
     if audio is not None and audio.unit_bytes > MAX_AUDIO_UNIT and strict:
         raise ValueError("audio frames are %d bytes (%.0f kbps): too big to fit one pack, the PSP plays no sound; use 320 kbps or lower" % (audio.frame_bytes, audio.kbps))
     with open(es_path, "rb") as f:
@@ -331,7 +363,7 @@ def mux_file(es_path, out_path, audio=None, version="0012", style="B", width=480
     if problems and strict:
         raise ValueError("this video will not play on a real PSP:\n  - " + "\n  - ".join(problems))
     if header_kib is None:
-        header_kib = HEADER_KIB[version]
+        header_kib = HEADER_KIB.get(version, PROFILES[style]["video_kib"])
     video_kib = PROFILES[style]["video_kib"]
     sysh = system_header(style, video_kib)
     vext = b"\x1e" + (0x6000 | video_kib).to_bytes(2, "big")

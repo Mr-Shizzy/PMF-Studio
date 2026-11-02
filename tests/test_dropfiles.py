@@ -11,7 +11,7 @@ class RouteTests(unittest.TestCase):
 
     def test_kinds(self):
         for name, kind in (("a.pbp", "pbp"), ("A.PMF", "pmf"), ("t.ctf", "ctf"), ("s.at3", "at3"), ("m.MKV", "video"), ("s.mp3", "audio"),
-                           ("p.png", "image"), ("x.rco", "rco"), ("notes.txt", "other")):
+                           ("p.png", "image"), ("x.rco", "rco"), ("g.cso", "disc"), ("G.ISO", "disc"), ("notes.txt", "other")):
             self.assertEqual(dropfiles.classify(os.path.join(self.d, name)), kind, name)
         self.assertEqual(dropfiles.classify(self.d), "folder")
 
@@ -29,6 +29,9 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(r("x.pmf", "extract"), ("extract", "src"))
         self.assertEqual(r("x.pmf", "shrink"), ("shrink", "src"))
         self.assertEqual(r("t.ctf"), ("extract", "src"))
+        for mode in ("gameboot", "player", "shrink", "icon"):
+            self.assertEqual(r("g.cso", mode), ("shrink", "src"), mode)                        # a game disc is for Shrink, whichever page is open
+        self.assertEqual(r("g.iso"), ("shrink", "src"))
         self.assertEqual(r("x.rco"), ("gameboot", "rco"))
         self.assertEqual(r("p.png", "gameboot"), ("gameboot", "preview"))
         self.assertEqual(dropfiles.route([self.d], "icon")[:2], ("shrink", "src"))

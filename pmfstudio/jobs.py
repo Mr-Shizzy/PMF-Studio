@@ -160,6 +160,15 @@ def extract(v, tools, emit):
 def shrink(v, tools, emit):
     """Game movies made smaller. v["src"] is a movie or a folder of movies, v["out"] the folder for the new ones (same file names)."""
     src, out = os.path.abspath(v["src"]), os.path.abspath(v["out"])
+    from pmfkit import umdimage
+    if umdimage.is_image(src):                      # a whole game: v["out"] is the new game file (.cso or .iso)
+        if os.path.normcase(out) == os.path.normcase(src):
+            raise cli.BuildError("Save the smaller game under another name. PMF Studio never replaces your original.")
+        argv = ["shrink", src, "-o", out, "--ffmpeg", tools["ffmpeg"], "--amount", str(v.get("picture", "0.5"))]
+        if v.get("sound", "keep") != "keep":
+            argv += ["--atracdenc", tools["atracdenc"], "--sound-kbps", str(int(v["sound"]))]
+        run(argv, emit)
+        return
     if os.path.isdir(src):
         if out == src or out.startswith(src.rstrip("\\/") + os.sep):
             raise cli.BuildError("Save the smaller movies in a different folder, not in the folder you picked. PMF Studio never replaces your originals.")

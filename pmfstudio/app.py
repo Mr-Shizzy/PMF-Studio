@@ -726,15 +726,17 @@ class App(tk.Tk):
             self.note("This sound replaces the icon movie's own sound. They never play together, and they share 512 KB, so a long sound means a smaller picture.", warn=True, parent=self.sep_holder)
 
     def page_shrink(self):
-        self.heading("Shrink game movies", "Make a game's own movie files (.pmf) smaller, so the game takes less room. Each movie keeps its name, picture size and length.")
+        self.heading("Shrink game movies", "Make a game's own movies (.pmf) smaller, so the game takes less room. Pick one movie, a folder of them, or the whole game "
+                     "(a .cso or .iso file). Each movie keeps its name, picture size and length.")
         f = tk.Frame(self.main, bg=T.bg)
         f.pack(fill="x", pady=3)
         self.label_cell(f, "Movies")
         self.vars["src"] = tk.StringVar()
         ttk.Entry(f, textvariable=self.vars["src"]).pack(side="left", fill="x", expand=True, padx=(0, 8))
         ttk.Button(f, text="A movie", command=lambda: self.pick_movies(False)).pack(side="left", padx=(0, 6))
-        ttk.Button(f, text="A folder", command=lambda: self.pick_movies(True)).pack(side="left")
-        self.shrink_info = tk.Label(self.main, text="Pick one movie, or a whole folder of them.", bg=T.bg, fg=T.muted, font=(FONT, 10), anchor="w", justify="left", wraplength=S(700))
+        ttk.Button(f, text="A folder", command=lambda: self.pick_movies(True)).pack(side="left", padx=(0, 6))
+        ttk.Button(f, text="A game", command=self.pick_game).pack(side="left")
+        self.shrink_info = tk.Label(self.main, text="Pick one movie, a whole folder of them, or a game.", bg=T.bg, fg=T.muted, font=(FONT, 10), anchor="w", justify="left", wraplength=S(700))
         self.shrink_info.pack(fill="x", pady=(0, 8))
         self.vars["picture"] = tk.StringVar(value="0.5")
         self.vars["sound"] = tk.StringVar(value="keep")
@@ -748,13 +750,21 @@ class App(tk.Tk):
         self.sound_note.pack(fill="x", pady=(2, 8))
         self.shrink_result = tk.Label(self.main, text="", bg=T.bg, fg=T.ink, font=(FONT, 10, "bold"), anchor="w")
         self.shrink_result.pack(fill="x", pady=(0, 4))
-        self.row("out", "Save to folder", "dir", initial=self.out_default("Shrunk movies"))
-        self.note("Your originals are never changed: the smaller movies go to the folder above with the same names. "
-                  "Always try one of them in your game before you use them all.")
+        self.vars["out"] = tk.StringVar(value=self.out_default("Shrunk movies"))
+        self.shrink_out_auto = self.vars["out"].get()
+        f = tk.Frame(self.main, bg=T.bg)
+        f.pack(fill="x", pady=3)
+        self.shrink_out_label = tk.Label(f, text="Save to folder", width=14, anchor="w", bg=T.bg, fg=T.ink, font=(FONT, 10))
+        self.shrink_out_label.pack(side="left")
+        ttk.Entry(f, textvariable=self.vars["out"]).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ttk.Button(f, text="Browse", command=self.pick_shrink_out).pack(side="left")
+        self.shrink_note = tk.Label(self.main, text="", bg=T.bg, fg=T.muted, font=(FONT, 10), anchor="w", justify="left", wraplength=S(700))
+        self.shrink_note.pack(fill="x", pady=(2, 4))
         self.footer("Shrink", self.run_shrink, bar=False)
         self.vars["src"].trace_add("write", lambda *a: self.shrink_typed())
         self.shrink_job = None
         self.shrink_info_data = None
+        self.shrink_image_mode = None
         self.shrink_survey(True)
 
     PICTURE_CHOICES = (("1.0", "As it is"), ("0.75", "75%"), ("0.5", "50%"), ("0.4", "40%"), ("0.3", "30%"), ("0.2", "20%"))
@@ -767,6 +777,43 @@ class App(tk.Tk):
         p = filedialog.askdirectory(initialdir=init) if folder else filedialog.askopenfilename(initialdir=init, filetypes=[("PMF movies", "*.pmf"), ("All files", "*.*")])
         if p:
             self.vars["src"].set(os.path.normpath(p))
+
+    def pick_game(self):
+        cur = self.vars["src"].get()
+        init = os.path.dirname(cur) if cur and os.path.isdir(os.path.dirname(cur)) else settings.output_dir(self.settings)
+        p = filedialog.askopenfilename(initialdir=init, filetypes=[("Game disc images", "*.cso *.iso"), ("All files", "*.*")])
+        if p:
+            self.vars["src"].set(os.path.normpath(p))
+
+    def shrink_is_game(self):
+        from pmfkit import umdimage
+        p = self.vars["src"].get().strip()
+        return bool(p) and umdimage.is_image(p)
+
+    def pick_shrink_out(self):
+        if self.shrink_is_game():
+            self.pick("out", "save", [("Game image (.cso is smaller)", "*.cso *.iso")])
+        else:
+            self.pick("out", "dir", None)
+
+    def shrink_out_refresh(self):
+        """the 'save to' row follows what was picked: a folder for movies, a new game file for a game"""
+        game = self.shrink_is_game()
+        if game:
+            name = os.path.splitext(os.path.basename(self.vars["src"].get().strip()))[0] + " (smaller).cso"
+            auto = self.out_default(name)
+            self.shrink_out_label.configure(text="Save game as")
+            self.shrink_note.configure(text="Your game file is never changed: the smaller game is saved as a new file (.cso is the smaller kind, .iso works too). "
+                                       "Only the movies inside it change; everything else on the disc is copied exactly as it was, in the same places. "
+                                       "A whole game takes several minutes. Try the new game on your PSP before you delete anything.")
+        else:
+            auto = self.out_default("Shrunk movies")
+            self.shrink_out_label.configure(text="Save to folder")
+            self.shrink_note.configure(text="Your originals are never changed: the smaller movies go to the folder above with the same names. "
+                                       "Always try one of them in your game before you use them all.")
+        if self.vars["out"].get() in ("", self.shrink_out_auto):          # the box still holds what was filled in for you: follow the choice
+            self.vars["out"].set(auto)
+        self.shrink_out_auto = auto
 
     def shrink_typed(self):
         if self.shrink_job:
@@ -783,21 +830,26 @@ class App(tk.Tk):
         if reread:
             self.shrink_info_data = None
             if not path:
-                self.shrink_info.configure(text="Pick one movie, or a whole folder of them.", fg=T.muted)
+                self.shrink_info.configure(text="Pick one movie, a whole folder of them, or a game.", fg=T.muted)
             elif not os.path.exists(path):
-                self.shrink_info.configure(text="Can't find that movie or folder.", fg=BAD)
+                self.shrink_info.configure(text="Can't find that movie, folder or game.", fg=BAD)
             else:
+                bad = ""
                 try:
                     self.shrink_info_data = shrink.survey(path)
+                except ValueError as e:
+                    self.shrink_info_data, bad = None, str(e)
                 except OSError:
                     self.shrink_info_data = None
                 info = self.shrink_info_data
                 if not info or not info.count:
                     self.shrink_info_data = None
-                    self.shrink_info.configure(text="There are no .pmf movies there.", fg=BAD)
+                    self.shrink_info.configure(text=bad or "There are no .pmf movies there.", fg=BAD)
                 else:
-                    self.shrink_info.configure(text="%d movie%s, %s. Now: picture about %s kbps, sound about %s kbps." % (
-                        info.count, "" if info.count == 1 else "s", self.fmt(info.total), format(int(info.picture_kbps), ","), int(info.sound_kbps)), fg=T.ink)
+                    self.shrink_info.configure(text="%s%d movie%s, %s. Now: picture about %s kbps, sound about %s kbps." % (
+                        "The game has " if self.shrink_is_game() else "", info.count, "" if info.count == 1 else "s", self.fmt(info.total),
+                        format(int(info.picture_kbps), ","), int(info.sound_kbps)), fg=T.ink)
+        self.shrink_out_refresh()
         self.shrink_draw()
 
     def shrink_draw(self):
@@ -844,12 +896,16 @@ class App(tk.Tk):
             self.sound_note.configure(text="The sound is encoded again at %s kbps%s. Lower is smaller and flatter; a sound that is already lower stays as it is." % (sound, was))
         if info:
             after = shrink.predict(info, ratio, int(sound) if sound != "keep" else None)
-            self.shrink_result.configure(text="After shrinking: about %s (now %s)." % (self.fmt(after), self.fmt(info.total)))
+            self.shrink_result.configure(text="%s: about %s (now %s)." % ("The movies in the game will take" if self.shrink_is_game() else "After shrinking", self.fmt(after), self.fmt(info.total)))
         else:
             self.shrink_result.configure(text="")
 
     def run_shrink(self):
-        self.start(jobs.shrink, [("src", "a movie or a folder of movies"), ("out", "the folder to save in")])
+        if self.shrink_is_game():
+            out = self.vars["out"].get().strip()
+            if out and not out.lower().endswith((".cso", ".iso")):
+                self.vars["out"].set(out + ".cso")
+        self.start(jobs.shrink, [("src", "a movie, a folder of movies or a game"), ("out", "where to save")])
 
     def page_at3(self):
         self.heading("AT3 Tools", "Make a new AT3 sound, shrink one that came with a game, or turn an AT3 into a WAV or MP3.")
@@ -980,7 +1036,9 @@ class App(tk.Tk):
                 "Makes the .pmf movies of a game smaller so the game takes less room. Pick one movie or a whole folder. Each smaller movie keeps its name, picture size and length, "
                 "and goes to another folder: your originals are never changed. You choose how much data the picture keeps and the quality of the sound (or leave either as it is); "
                 "the page shows the picture and sound bitrates of your movies and what each choice gives. "
-                "Try one movie in your game before you use them all.\n\n"
+                "You can also pick the whole game (A game: a .cso or .iso file). PMF Studio finds the movies inside it, shrinks them (all sound tracks of a movie, "
+                "such as one per language, are kept), and saves a new game file; only the movies change and everything else on the disc stays exactly as it was. "
+                "Try the new game on your PSP before you delete anything.\n\n"
                 "EBOOT icon\n"
                 "The small movie that plays in the XMB when you highlight a game. It's saved into a copy of the game's EBOOT. "
                 "The movie's own sound is used, unless you tick Use a different sound. The movie and sound together must fit in 512 KB.\n\n"
@@ -1104,13 +1162,15 @@ class App(tk.Tk):
         except BuildError as e:
             messagebox.showinfo("PMF Studio", str(e))
             return
-        if self.mode == "shrink":
+        from pmfkit import umdimage
+        game = self.mode == "shrink" and umdimage.is_image(v.get("src", ""))
+        if self.mode == "shrink" and not game:
             from pmfkit import shrink as shrinkmod
             same = sum(os.path.exists(os.path.join(v["out"], rel if os.path.isdir(v["src"]) else os.path.basename(v["src"]))) for _, rel in shrinkmod.find_movies(v["src"]))
             if same and not messagebox.askyesno("PMF Studio", "%d movie%s with the same name%s already in that folder. Replace %s?" % (
                     same, "" if same == 1 else "s", "" if same == 1 else "s", "it" if same == 1 else "them")):
                 return
-        if self.mode != "shrink" and os.path.exists(v["out"]) and not messagebox.askyesno("PMF Studio", "%s already exists. Replace it?" % os.path.basename(v["out"])):
+        if (self.mode != "shrink" or game) and os.path.exists(v["out"]) and not messagebox.askyesno("PMF Studio", "%s already exists. Replace it?" % os.path.basename(v["out"])):
             return
         try:
             tools = self.tools()
@@ -1248,7 +1308,7 @@ class App(tk.Tk):
                 self.size_bar.set(min(1.0, size / limit))
         if self.settings["open_folder"]:
             try:
-                os.startfile(os.path.abspath(data) if self.mode == "shrink" else os.path.dirname(os.path.abspath(data)))
+                os.startfile(os.path.abspath(data) if os.path.isdir(data) else os.path.dirname(os.path.abspath(data)))
             except (OSError, AttributeError):
                 pass
 

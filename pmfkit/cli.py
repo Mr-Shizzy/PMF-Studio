@@ -413,6 +413,14 @@ def cmd_shrink(a):
     a.ffmpeg = tool(a.ffmpeg)
     a.atracdenc = tool(a.atracdenc) if a.atracdenc else None
     ratio = shrink.RATIOS[a.amount] if a.amount in shrink.RATIOS else float(a.amount)
+    from . import umdimage
+    if umdimage.is_image(a.input):                 # a game's own disc image (.cso / .iso): the movies inside it are shrunk and a new image is written
+        results = umdimage.shrink_image(a.input, a.output, a.ffmpeg, a.atracdenc, ratio, a.sound_kbps, a.bframes)
+        image = results.pop()
+        moved = [r for r in results if r.after < r.before]
+        print("%d of %d movies made smaller: %.1f MB -> %.1f MB" % (len(moved), len(results), sum(r.before for r in results) / 1e6, sum(r.after for r in results) / 1e6))
+        print("game image: %.1f MB -> %.1f MB (%s)" % (image.before / 1e6, image.after / 1e6, a.output))
+        return
     results = shrink.shrink(a.input, a.output, a.ffmpeg, a.atracdenc, ratio, a.sound_kbps, a.bframes)
     done = [r for r in results if not r.note.startswith("failed")]
     failed = len(results) - len(done)

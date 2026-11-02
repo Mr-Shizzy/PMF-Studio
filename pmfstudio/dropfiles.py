@@ -10,11 +10,11 @@ IMAGES = {".png", ".jpg", ".jpeg", ".bmp"}
 
 
 def classify(path):
-    """folder | pbp | pmf | ctf | at3 | video | audio | image | rco | other"""
+    """folder | pbp | pmf | ctf | at3 | disc | video | audio | image | rco | other"""
     if os.path.isdir(path):
         return "folder"
     ext = os.path.splitext(path)[1].lower()
-    for kind, group in (("pbp", {".pbp"}), ("pmf", {".pmf"}), ("ctf", {".ctf"}), ("at3", {".at3"}), ("rco", {".rco"}),
+    for kind, group in (("pbp", {".pbp"}), ("pmf", {".pmf"}), ("ctf", {".ctf"}), ("at3", {".at3"}), ("rco", {".rco"}), ("disc", {".cso", ".iso"}),
                         ("video", VIDEO), ("audio", AUDIO), ("image", IMAGES)):
         if ext in group:
             return kind
@@ -28,7 +28,7 @@ def route(paths, mode):
         return None, None, None, ""
     first, kind = paths[0], classify(paths[0])
     name = os.path.basename(first.rstrip("\\/")) or first
-    if mode == "player" and kind not in ("folder", "pbp", "other"):
+    if mode == "player" and kind not in ("folder", "pbp", "other", "disc"):
         return "player", None, first, "Opened %s in the player." % name
     if kind == "folder":
         return "shrink", "src", first, "%s: the folder to shrink." % name
@@ -39,6 +39,8 @@ def route(paths, mode):
         if mode == "extract":
             return "extract", "src", first, "%s: the movie to take apart." % name
         return "player", None, first, "Opened %s in the player." % name
+    if kind == "disc":
+        return "shrink", "src", first, "%s: the game to shrink." % name
     if kind == "ctf":
         return "extract", "src", first, "%s: the theme to take the gameboot out of." % name
     if kind == "pbp":

@@ -67,18 +67,26 @@ def packs(body):
         yield pk
 
 
-def demux(pmf):
-    """-> (Params, video_es, audio_bytes, list[Pack]); audio_bytes = the audio ES without the 4-byte PES prefixes."""
+def demux_all(pmf):
+    """-> (Params, video_es, {track number: audio bytes}, list[Pack]). The first byte of an audio PES payload is its track (0, 1, 2...);
+    the 4-byte PES prefix is not part of the audio bytes."""
     params = psmf.parse_header(pmf[:2048])
     plist = list(packs(pmf[2048:]))
-    v, a = bytearray(), bytearray()
+    v, tracks = bytearray(), {}
     for pk in plist:
         for it in pk.items:
             if it.sid == 0xE0:
                 v += it.payload
-            elif it.sid == 0xBD:
-                a += it.payload[4:]
-    return params, bytes(v), bytes(a), plist
+            elif it.sid == 0xBD and len(it.payload) >= 4:
+                tracks.setdefault(it.payload[0], bytearray()).extend(it.payload[4:])
+    return params, bytes(v), {t: bytes(b) for t, b in sorted(tracks.items())}, plist
+
+
+def demux(pmf):
+    """-> (Params, video_es, audio_bytes, list[Pack]); audio_bytes = the audio ES without the 4-byte PES prefixes. A movie with
+    several sound tracks gives the first one here (demux_all gives all of them)."""
+    params, video, tracks, plist = demux_all(pmf)
+    return params, video, (tracks[min(tracks)] if tracks else b""), plist
 
 
 def duration_seconds(video_es, audio_es=b""):

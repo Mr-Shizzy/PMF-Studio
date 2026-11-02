@@ -52,6 +52,31 @@ def run():
                     say("%s (%d bytes)" % (name, os.path.getsize(out)), os.path.getsize(out) > 1000)
                 except Exception as e:
                     say("%s: %s" % (name, str(e)[:200]), False)
+            try:                                              # a whole game: a small disc is built, its movie shrunk in place, the new disc read back
+                import shutil
+                from pmfkit import umdbuild, umdimage
+                game = os.path.join(work, "game")
+                os.makedirs(game + "/PSP_GAME/USRDIR/FMV")
+                shutil.copy(work + "/ci.pmf", game + "/PSP_GAME/USRDIR/FMV/MOVIE.PMF")
+                shutil.copy(work + "/ci.pmf", game + "/PSP_GAME/USRDIR/FMV/MOVIE_FR.PMF")
+                with open(game + "/UMD_DATA.BIN", "wb") as f:
+                    f.write(b"ULES-00000|0000000000000000|0001|G".ljust(48, b"\0"))
+                with open(game + "/PSP_GAME/PARAM.SFO", "wb") as f:
+                    f.write(b"x" * 200)
+                umdbuild.build(game, umdbuild.sequential_list(game), work + "/game.iso", log=lambda *a: None)
+                jobs.shrink(dict(src=work + "/game.iso", out=work + "/game_small.cso", picture="0.5", sound="64"), tools, lambda l: None)
+                sizes = {}
+                for name in ("game.iso", "game_small.cso"):
+                    img = umdimage.Image(work + "/" + name)
+                    try:
+                        sizes[name] = {e.path: e.size for e in umdimage.walk(img)}
+                    finally:
+                        img.close()
+                big, small = sizes["game.iso"]["\\PSP_GAME\\USRDIR\\FMV\\MOVIE.PMF"], sizes["game_small.cso"]["\\PSP_GAME\\USRDIR\\FMV\\MOVIE.PMF"]
+                say("a whole game made smaller (movie %d -> %d bytes, both names)" % (big, small),
+                    small < big and sizes["game_small.cso"]["\\PSP_GAME\\USRDIR\\FMV\\MOVIE_FR.PMF"] == small)
+            except Exception as e:
+                say("a whole game made smaller: %s" % str(e)[:200], False)
             if os.path.exists(work + "/gb.pmf"):
                 pmf = open(work + "/gb.pmf", "rb").read()
                 say("the gameboot is a real PMF under 3.03 MB", pmf[:4] == b"PSMF" and len(pmf) <= 3030000)

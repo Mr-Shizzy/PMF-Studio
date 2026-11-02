@@ -129,12 +129,24 @@ def needs(mode, v, tools, out_folder):
         size = _size(v.get("src", ""))
         out_need, temp_need = int(size * 1.6) + 20_000_000, int(size * 2.2) + 50_000_000
     elif mode == "shrink":
-        from pmfkit import shrink
+        from pmfkit import shrink, umdimage
         info = shrink.survey(v["src"])
         sound = int(v["sound"]) if v.get("sound", "keep") != "keep" else None
-        out_need = shrink.predict(info, float(v.get("picture", "0.5")), sound) + 1_000_000
-        biggest = max([_size(p) for p, _ in shrink.find_movies(v["src"])] or [0])
-        temp_need = biggest * 4
+        if umdimage.is_image(v["src"]):
+            # a whole game: the new image is about as big as the old one (an .iso exactly as long, a .cso a little smaller); the smaller movies
+            # wait in the temporary folder until the image is written
+            img = umdimage.Image(v["src"])
+            try:
+                movies = umdimage.find_movies(umdimage.walk(img))
+                disc_bytes = img.size
+            finally:
+                img.close()
+            out_need = (disc_bytes if v.get("out", "").lower().endswith(".iso") else _size(v["src"])) + 1_000_000
+            temp_need = int(shrink.predict(info, float(v.get("picture", "0.5")), sound)) + max([m.size for m in movies] or [0]) * 4
+        else:
+            out_need = shrink.predict(info, float(v.get("picture", "0.5")), sound) + 1_000_000
+            biggest = max([_size(p) for p, _ in shrink.find_movies(v["src"])] or [0])
+            temp_need = biggest * 4
     return [(out_folder, out_need), (tempfile.gettempdir(), temp_need)]
 
 
@@ -180,7 +192,9 @@ def run(mode, v, tools):
         return
     check_name(out)
     check_not_input(v, out)
-    folder = out if mode == "shrink" else os.path.dirname(os.path.abspath(out))
+    from pmfkit import umdimage
+    whole_game = mode == "shrink" and umdimage.is_image(v.get("src", ""))          # a game's new image is a file; movies go to a folder
+    folder = out if mode == "shrink" and not whole_game else os.path.dirname(os.path.abspath(out))
     check_writable(folder)
     check_memory(mode, v, tools)
     check_space(needs(mode, v, tools, folder))
