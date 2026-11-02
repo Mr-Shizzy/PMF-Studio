@@ -1,0 +1,87 @@
+diff --git a/src/atrac/at3p/at3p_bitstream.cpp b/src/atrac/at3p/at3p_bitstream.cpp
+index c6f8045..ee09cba 100644
+--- a/src/atrac/at3p/at3p_bitstream.cpp
++++ b/src/atrac/at3p/at3p_bitstream.cpp
+@@ -25,6 +25,7 @@
+ 
+ #include "ff/atrac3plus_data.h"
+ 
++#include <cstdlib>
+ #include <iostream>
+ #include <limits>
+ #include <memory>
+@@ -111,8 +112,10 @@ IBitStreamPartEncoder::EStatus TConfigure::Encode(void* frameData, TBitAllocHand
+             7, 6, 6, 6, 6, 6, 6, 6,
+             6, 6, 5, 5, 4, 3, 2, 1
+         };
+-        frame->WordLen[i].first = allocTable[i];
+-        frame->WordLen[i].second = allocTable[i];
++        // lower precision (frame->PrecisionShift steps) so that more quant units fit a small frame; never below word length 1
++        const uint8_t wl = allocTable[i] > frame->PrecisionShift + 1 ? allocTable[i] - frame->PrecisionShift : 1;
++        frame->WordLen[i].first = wl;
++        frame->WordLen[i].second = wl;
+     }
+ 
+     frame->SfIdx.resize(frame->NumQuantUnits);
+@@ -633,9 +636,17 @@ IBitStreamPartEncoder::EStatus TTonalComponentEncoder::CheckFrameDone(TSpecFrame
+     uint32_t totalConsumption = BitsUsed + ba.GetCurGlobalConsumption();
+ 
+     if (totalConsumption > frame->SizeBits) {
+-        if (frame->NumQuantUnits == 32) {
+-            frame->NumQuantUnits = 28;
+-        } else {
++        // Too big. First drop quant units down to the number we want to keep (the bandwidth), then lower the precision of all of them step by step;
++        // only when even the coarsest precision does not fit, drop more quant units.
++        static const uint8_t kMaxShift = getenv("AT3P_MAXSHIFT") ? static_cast<uint8_t>(atoi(getenv("AT3P_MAXSHIFT"))) : 6;
++        if (frame->NumQuantUnits > frame->MinQuantUnits && frame->NumQuantUnits > 1) {
++            frame->NumQuantUnits = frame->NumQuantUnits == 32 ? 28 : frame->NumQuantUnits - 1;
++            if (frame->NumQuantUnits < frame->MinQuantUnits) {
++                frame->NumQuantUnits = frame->MinQuantUnits;
++            }
++        } else if (frame->PrecisionShift < kMaxShift) {
++            frame->PrecisionShift++;
++        } else if (frame->NumQuantUnits > 1) {
+             frame->NumQuantUnits--;
+         }
+         return EStatus::Repeat;
+@@ -721,6 +732,25 @@ void TAt3PBitStream::WriteFrame(int channels, const TAt3PGhaData* tonalBlock, co
+ 
+     TSpecFrame frame(FrameSzToAllocBits, initialNumQuantUnits, channels, tonalBlock, sces);
+ 
++    // How many quant units (bandwidth) a frame of this size should keep before the precision is lowered: all of them for big frames, fewer for small ones.
++    // (Quant unit n ends at coefficient 0,16,32,..: 8 -> 1.4 kHz, 16 -> 4.1 kHz, 20 -> 6.9 kHz, 22 -> 8.3 kHz, 24 -> 11 kHz, 26 -> 15 kHz, 28 -> 18 kHz.)
++    static const struct { uint32_t bytes; uint32_t qu; } kMinQu[] = {
++        {0, 12}, {192, 16}, {280, 20}, {376, 22}, {560, 24}, {744, 26}, {1024, 32}
++    };
++    uint32_t minQu = 32;
++    for (size_t i = 1; i < sizeof(kMinQu) / sizeof(kMinQu[0]); i++) {
++        if (FrameSz <= kMinQu[i].bytes) {
++            const auto& a = kMinQu[i - 1];
++            const auto& b = kMinQu[i];
++            minQu = a.qu + (b.qu - a.qu) * (FrameSz - a.bytes) / (b.bytes - a.bytes);
++            break;
++        }
++    }
++    if (const char* e = getenv("AT3P_MINQU")) {
++        minQu = static_cast<uint32_t>(atoi(e));
++    }
++    frame.MinQuantUnits = minQu > 32 ? 32 : (minQu < 1 ? 1 : minQu);
++
+     Encoder.Do(&frame, bitStream);
+ 
+     std::vector<char> buf = bitStream.GetBytes();
+diff --git a/src/atrac/at3p/at3p_bitstream_impl.h b/src/atrac/at3p/at3p_bitstream_impl.h
+index e218cce..7ea5ede 100644
+--- a/src/atrac/at3p/at3p_bitstream_impl.h
++++ b/src/atrac/at3p/at3p_bitstream_impl.h
+@@ -48,6 +48,10 @@ struct TSpecFrame {
+ 
+     const uint32_t SizeBits;
+     uint32_t NumQuantUnits;
++    // Small frames (low bitrate): instead of only dropping the top quant units until the frame fits (which cuts the bandwidth to a few kHz),
++    // keep at least MinQuantUnits of them and lower the precision (word lengths) of all of them by PrecisionShift steps.
++    uint32_t MinQuantUnits = 0;
++    uint8_t PrecisionShift = 0;
+     const TAt3PGhaData* TonalBlock;
+     std::vector<std::pair<uint8_t, uint8_t>> WordLen;
+     std::vector<std::pair<uint8_t, uint8_t>> SfIdx;
