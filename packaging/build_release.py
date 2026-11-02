@@ -201,6 +201,8 @@ def main():
         say("no personal strings found in the release")
     if "--no-zip" not in sys.argv:
         make_zip()
+    shutil.rmtree(BUILD, ignore_errors=True)               # the half-finished copies in build\ also contain a PMF Studio.exe; only release\ should
+    say("\nthe finished program is the folder %s (and the zip beside it)" % FOLDER)
 
 
 if __name__ == "__main__":

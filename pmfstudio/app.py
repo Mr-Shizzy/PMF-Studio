@@ -202,7 +202,8 @@ class App(tk.Tk):
             lines = "\n".join("  \u2022 %s: %s" % (n, t) for n, t in problems)
             messagebox.showwarning("PMF Studio", "PMF Studio can't use some of its helper programs:\n\n%s\n\n"
                                    "They should sit in the \"tools\" folder next to PMF Studio:\n%s\n\n"
-                                   "Download PMF Studio again and keep the whole folder together. If your antivirus blocked a file, allow it and restart."
+                                   "Start PMF Studio from the folder you unzipped, with everything in it left together (don't copy just the .exe somewhere else). "
+                                   "If your antivirus blocked a file, allow it and restart."
                                    % (lines, os.path.join(app_dir(), "tools")))
 
     def quit_app(self):
