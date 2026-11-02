@@ -9,8 +9,8 @@ import os
 from .paths import app_dir, default_output
 
 FILE = "PMF Studio settings.json"
-DEFAULTS = {"auto_update": True, "dark": True, "open_folder": True, "output_dir": "", "low_priority": True}
-KINDS = {"auto_update": bool, "dark": bool, "open_folder": bool, "output_dir": str, "low_priority": bool}
+DEFAULTS = {"auto_update": True, "dark": True, "open_folder": True, "output_dir": "", "low_priority": True, "skip_version": ""}
+KINDS = {"auto_update": bool, "dark": bool, "open_folder": bool, "output_dir": str, "low_priority": bool, "skip_version": str}
 
 
 def path():

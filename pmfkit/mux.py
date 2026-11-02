@@ -9,6 +9,7 @@ Rules reproduced from Sony-composer PMFs (see RESEARCH_NOTES.md):
     an audio pack waits until the 4096-byte audio buffer has room (units leave it at their PTS)
 """
 import bisect
+import os
 from fractions import Fraction
 
 from . import psmf
@@ -109,7 +110,7 @@ def gop_index_len(npics):
 
 class _Entry:
     """One output pack before SCR assignment."""
-    __slots__ = ("kind", "body", "floor", "gop", "cum_end", "gop_start")
+    __slots__ = ("kind", "body", "floor", "gop", "cum_end", "gop_start", "pos")
 
 
 def _layout_video(aus, style, video_kib, video_lead=VIDEO_LEAD, disp=None):
@@ -132,47 +133,54 @@ def _layout_video(aus, style, video_kib, video_lead=VIDEO_LEAD, disp=None):
     entries, gops = [], []
     for gi in range(len(idr) - 1):
         a0, a1 = idr[gi], idr[gi + 1]
-        data = b"".join(a.data for a in aus[a0:a1])
-        starts, ends, o = [], [], 0
-        for a in aus[a0:a1]:
-            starts.append(o)
-            o += len(a.data)
-            ends.append(o)
-        npics = a1 - a0
-        last_stamp, pos, first = a0, 0, True
-        mine = []
-        while pos < len(data):
-            fields, flags2 = b"", 0
-            if first:
-                room = PACK - 14 - len(sysh) - (6 + gop_index_len(npics))
-                fields = ts(3, pts(a0)) + ts(1, dts(a0)) + vext
-                flags2 = 0xC1
-            else:
-                room = PACK - 14
-                j = bisect.bisect_left(starts, pos)
-                # an AU must start inside the payload that is left once the 10 PTS/DTS bytes are added
-                if j < npics and starts[j] < pos + room - 9 - 10 and (a0 + j) - last_stamp >= STAMP_EVERY:
-                    k = a0 + j
-                    if pts(k) == dts(k):
-                        fields, flags2 = ts(2, pts(k)), 0x80
-                    else:
-                        fields, flags2 = ts(3, pts(k)) + ts(1, dts(k)), 0xC0
-                    last_stamp = k
-            end = min(pos + room - 9 - len(fields), len(data))
-            e = _Entry()
-            e.kind, e.gop, e.gop_start = "v", gi, first
-            if end < len(data):
-                kn = a0 + bisect.bisect_right(starts, end) - 1      # AU holding the byte after this pack
-            else:
-                kn = a1 if a1 < len(aus) else None
-            e.floor = None if kn is None else dts(kn) - video_lead
-            e.body = pes(0xE0, flags2, fields, data[pos:end], room)
-            e.cum_end = end
-            mine.append(e)
-            entries.append(e)
-            pos, first = end, False
+        mine, ends = _layout_gop(gi, a0, aus[a0:a1], a1 < len(aus), pts, dts, sysh, vext, video_lead)
+        entries.extend(mine)
         gops.append((a0, a1, mine, ends))
     return entries, gops, sysh
+
+
+def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead):
+    """The video packs of one GOP (a0 = index of its first access unit, has_next = another GOP follows) -> (entries, cumulative end of every AU)"""
+    a1 = a0 + len(gop_aus)
+    data = b"".join(a.data for a in gop_aus)
+    starts, ends, o = [], [], 0
+    for a in gop_aus:
+        starts.append(o)
+        o += len(a.data)
+        ends.append(o)
+    npics = a1 - a0
+    last_stamp, pos, first = a0, 0, True
+    mine = []
+    while pos < len(data):
+        fields, flags2 = b"", 0
+        if first:
+            room = PACK - 14 - len(sysh) - (6 + gop_index_len(npics))
+            fields = ts(3, pts(a0)) + ts(1, dts(a0)) + vext
+            flags2 = 0xC1
+        else:
+            room = PACK - 14
+            j = bisect.bisect_left(starts, pos)
+            # an AU must start inside the payload that is left once the 10 PTS/DTS bytes are added
+            if j < npics and starts[j] < pos + room - 9 - 10 and (a0 + j) - last_stamp >= STAMP_EVERY:
+                k = a0 + j
+                if pts(k) == dts(k):
+                    fields, flags2 = ts(2, pts(k)), 0x80
+                else:
+                    fields, flags2 = ts(3, pts(k)) + ts(1, dts(k)), 0xC0
+                last_stamp = k
+        end = min(pos + room - 9 - len(fields), len(data))
+        e = _Entry()
+        e.kind, e.gop, e.gop_start, e.pos = "v", gi, first, None
+        if end < len(data):
+            kn = a0 + bisect.bisect_right(starts, end) - 1      # AU holding the byte after this pack
+        else:
+            kn = a1 if has_next else None
+        e.floor = None if kn is None else dts(kn) - video_lead
+        e.body = pes(0xE0, flags2, fields, data[pos:end], room)
+        e.cum_end = end
+        mine.append(e)
+        pos, first = end, False
+    return mine, ends
 
 
 class _AudioFeeder:
@@ -202,7 +210,7 @@ class _AudioFeeder:
         take = min(len(self.es) - self.g, PACK - 14 - 9 - hl - 4)
         ptr = (-self.g) % self.U
         e = _Entry()
-        e.kind, e.gop, e.gop_start, e.cum_end, e.floor = "a", None, False, 0, None
+        e.kind, e.gop, e.gop_start, e.cum_end, e.floor, e.pos = "a", None, False, 0, None, None
         if ptr < take:
             payload = b"\x00\x00" + ptr.to_bytes(2, "big") + self.es[self.g:self.g + take]
             pts = int(self.pts_base + ((self.g + ptr) // self.U) * AUDIO_UNIT_TICKS)
@@ -293,3 +301,142 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
         stream_bytes=len(stream), last_pts=FIRST_PTS + FRAME * len(aus), width=width, height=height,
         version=version, first_pts=FIRST_PTS, video_buffer_kib=header_kib, audio=audio is not None))
     return hdr + bytes(stream)
+
+
+def _gops_from(units):
+    """access units in -> (index of its first unit, its units, whether another GOP follows) for each GOP, one GOP at a time"""
+    cur, a0, n, sizes = [], 0, 0, 0
+    for au in units:
+        if au.gop_start and cur:
+            yield a0, cur, True
+            a0, cur = n, []
+        cur.append(au)
+        n += 1
+    if cur:
+        yield a0, cur, False
+
+
+def mux_file(es_path, out_path, audio=None, version="0012", style="B", width=480, height=272, header_kib=None, strict=True,
+             index_last_flag=0, video_lead=VIDEO_LEAD, audio_pts_base=AUDIO_PTS_BASE, audio2_floor=AUDIO2_FLOOR):
+    """The same file mux() makes (no B-frames), but read from a file and written to a file a piece at a time: the memory used is one GOP
+    and the sound, however long the movie is (mux() holds the picture data about six times over). -> the size written."""
+    from .h264 import iter_access_units
+    if style not in PROFILES:
+        raise ValueError("unknown stream style %r (use A or B)" % style)
+    if audio is not None and audio.unit_bytes > MAX_AUDIO_UNIT and strict:
+        raise ValueError("audio frames are %d bytes (%.0f kbps): too big to fit one pack, the PSP plays no sound; use 320 kbps or lower" % (audio.frame_bytes, audio.kbps))
+    with open(es_path, "rb") as f:
+        head = f.read(1 << 20)
+    problems = psp_problems(head, False)
+    if problems and strict:
+        raise ValueError("this video will not play on a real PSP:\n  - " + "\n  - ".join(problems))
+    if header_kib is None:
+        header_kib = HEADER_KIB[version]
+    video_kib = PROFILES[style]["video_kib"]
+    sysh = system_header(style, video_kib)
+    vext = b"\x1e" + (0x6000 | video_kib).to_bytes(2, "big")
+    shift = 1                                                       # no B-frames: DTS = decode position - 1, PTS = decode position
+    pts = lambda k: FIRST_PTS + FRAME * k                           # noqa: E731
+    dts = lambda k: FIRST_PTS + FRAME * (k - shift)                 # noqa: E731
+
+    counted = [0]
+
+    def counting(units):
+        for au in units:
+            if len(au.data) > 0xFFFF:
+                raise ValueError("a picture is larger than 65535 bytes; lower the bitrate/quality")
+            counted[0] += 1
+            yield au
+
+    def video_entries():
+        for gi, (a0, gop_aus, has_next) in enumerate(_gops_from(counting(iter_access_units(es_path)))):
+            mine, ends = _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead)
+            yield mine, ends, [len(a.data) for a in gop_aus]
+
+    feeder = _AudioFeeder(audio, style, audio_pts_base, audio2_floor) if audio is not None else None
+    gops = video_entries()
+    queue, ends_of, sizes_of = [], None, None                       # video packs of the GOP being merged, waiting to be placed
+
+    def next_video():
+        nonlocal queue, ends_of, sizes_of
+        if not queue:
+            try:
+                mine, ends_of, sizes_of = next(gops)
+            except StopIteration:
+                return None
+            queue = list(mine)
+            for e in queue:
+                e.pos = None
+            next_video.mine = list(mine)
+        return queue[0]
+    next_video.mine = []
+
+    tmp = out_path + ".part"
+    packs, cur, ext_pending = 0, None, True
+    pending = []                                                    # (scr, entry) from an unresolved GOP start onward
+    unresolved = None                                               # (start entry, GOP packs, ends, sizes)
+
+    def when(floor):
+        t = SCR_START if cur is None else cur + SCR_STEP
+        return t if floor is None else max(t, Fraction(floor * 300))
+
+    def resolve(out):
+        nonlocal pending, unresolved
+        g, mine, ends, sizes, needed = unresolved
+        idx = [t.pos - g.pos for t in needed]
+        bf = gop_index(sizes, idx, index_last_flag, None)
+        assert len(bf) == gop_index_len(len(sizes))
+        g.body = sysh + b"\x00\x00\x01\xbf" + len(bf).to_bytes(2, "big") + bf + g.body
+        for scr, e in pending:
+            pk = pack_header(scr) + e.body
+            assert len(pk) == PACK, len(pk)
+            out.write(pk)
+        pending, unresolved = [], None
+
+    try:
+        with open(tmp, "wb") as out:
+            out.write(b"\0" * PACK)                                 # the header goes here at the end, when the size is known
+            while True:
+                ventry = next_video()
+                have_a = feeder is not None and not feeder.done()
+                if ventry is None and not have_a:
+                    break
+                tv = when(ventry.floor) if ventry is not None else None
+                ta = when(feeder.next_floor()) if have_a and cur is not None else None
+                if tv is not None and (not have_a or cur is None or tv < ta):
+                    e, t = queue.pop(0), tv
+                    ext_pending = ext_pending or e.gop_start
+                else:
+                    e, t = feeder.build(ext_pending), ta
+                    ext_pending = False
+                scr = int(t)
+                cur = t
+                e.pos = packs
+                packs += 1
+                if unresolved is None and e.kind == "v" and e.gop_start:
+                    mine_now = next_video.mine
+                    unresolved = (e, mine_now, ends_of, sizes_of, [next(m for m in mine_now if m.cum_end >= end) for end in ends_of[:4]])
+                if unresolved is not None:
+                    pending.append((scr, e))
+                    if all(m.pos is not None for m in unresolved[4]):
+                        resolve(out)
+                else:
+                    pk = pack_header(scr) + e.body
+                    assert len(pk) == PACK, len(pk)
+                    out.write(pk)
+            if unresolved is not None:
+                resolve(out)
+            if counted[0] == 0:
+                raise ValueError("there is no picture in that stream")
+            out.seek(0)
+            out.write(psmf.build_header(psmf.Params(
+                stream_bytes=packs * PACK, last_pts=FIRST_PTS + FRAME * counted[0], width=width, height=height,
+                version=version, first_pts=FIRST_PTS, video_buffer_kib=header_kib, audio=audio is not None)))
+        os.replace(tmp, out_path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    return packs * PACK + PACK

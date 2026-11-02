@@ -6,7 +6,7 @@ import sys
 import tempfile
 import time
 
-from . import jobs, paths, settings
+from . import VERSION, STAGE, jobs, paths, settings
 from pmfkit import extract, toolinfo
 from pmfkit.demux import demux
 
@@ -63,6 +63,7 @@ def run():
         finally:
             import shutil
             shutil.rmtree(work, ignore_errors=True)
+    lines.insert(0, "PMF Studio %s %s" % (VERSION, STAGE))
     lines.append("SELFTEST " + ("OK" if ok else "FAILED"))
     text = "\n".join(lines) + "\n"
     try:

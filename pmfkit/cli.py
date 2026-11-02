@@ -18,7 +18,7 @@ from .fit import pick_audio_kbps
 from .toolinfo import ascii_temp_dir, is_ascii
 from .gameboot import STOCK_SECONDS, BUDGET_BYTES, VERIFIED_OK_BYTES, VERIFIED_FAIL_BYTES, movie_ms
 from .snd0 import COMBINED_LIMIT
-from .mux import mux, ICON1,ICON1_GOP, ICON1_VIDEO_KBPS, ICON1_AUDIO_KBPS, ICON1_MAX_BYTES, ICON1_VERIFIED_OK, ICON1_VERIFIED_FAIL
+from .mux import mux, mux_file, ICON1,ICON1_GOP, ICON1_VIDEO_KBPS, ICON1_AUDIO_KBPS, ICON1_MAX_BYTES, ICON1_VERIFIED_OK, ICON1_VERIFIED_FAIL
 
 # Sony-composer gameboots use 1 reference frame and no weighted prediction; PPSSPP plays anything, the PSP hardware decoder is stricter
 X264_PARAMS = "aud=1:nal-hrd=vbr:pic-struct=1:force-cfr=1:scenecut=0:repeat-headers=1"
@@ -208,6 +208,16 @@ def encode_audio(ffmpeg, atracdenc, src, out_oma, seconds, lufs=DEFAULT_LUFS, kb
     os.remove(wav)
 
 
+class Streamed:
+    """what make_pmf returns when it wrote the movie straight to a.stream_out (a long movie is never held in memory): the size written"""
+
+    def __init__(self, path, size):
+        self.path, self.size = path, size
+
+    def __len__(self):
+        return self.size
+
+
 def make_pmf(a):
     """video (+ audio) -> pmf bytes. a.limit_bytes (optional) is a size budget the video bitrate is lowered to fit."""
     own = not a.workdir
@@ -265,7 +275,11 @@ def _make_pmf(a, work):
             encode_video(a.ffmpeg, a.input, es, a.seconds, w, h, video_kbps, gop, refs, a.weightp, a.fit, bufsize, a.bframes, getattr(a, "start", 0), total)
         PROGRESS.report(0.97, "Packaging the movie\u2026")
         try:
-            pmf = mux(open(es, "rb").read(), audio, **opt)
+            if limit is None and getattr(a, "stream_out", None) and not a.bframes:
+                opt_stream = {k: v for k, v in opt.items() if k != "allow_b"}
+                pmf = Streamed(a.stream_out, mux_file(es, a.stream_out, audio, **opt_stream))     # no size budget to fit: written piece by piece
+            else:
+                pmf = mux(open(es, "rb").read(), audio, **opt)
         except ValueError as e:
             if "picture is larger" not in str(e):
                 raise
@@ -377,8 +391,10 @@ def cmd_gameboot(a):
 
 
 def cmd_make(a):
+    a.stream_out = None if a.icon1 else a.output
     pmf = make_pmf(a)
-    open(a.output, "wb").write(pmf)
+    if not isinstance(pmf, Streamed):
+        open(a.output, "wb").write(pmf)
     print("wrote %s (%d bytes)" % (a.output, len(pmf)))
     if a.icon1 and len(pmf) > ICON1_VERIFIED_OK:
         print("warning: %d bytes is larger than any ICON1 verified on a real PSP (%d ok, %d showed nothing)" % (len(pmf), ICON1_VERIFIED_OK, ICON1_VERIFIED_FAIL))

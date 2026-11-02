@@ -104,6 +104,7 @@ def pyinstaller():
            "--distpath", os.path.join(BUILD, "dist"), "--workpath", os.path.join(BUILD, "work"), "--specpath", BUILD,
            "--icon", os.path.join(ROOT, "pmfstudio", "assets", "icon.ico"),
            "--add-data", os.path.join(ROOT, "pmfstudio", "assets") + os.pathsep + os.path.join("pmfstudio", "assets"),
+           "--add-data", os.path.join(ROOT, "tools", "atracdenc", "bin", "atracdenc.exe") + os.pathsep + "spare",       # a spare copy, put back if the file in tools\\ is removed
            "--paths", ROOT, "--exclude-module", "PIL", "--exclude-module", "numpy", os.path.join(ROOT, "packaging", "entry.py")]
     r = subprocess.run(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if r.returncode:

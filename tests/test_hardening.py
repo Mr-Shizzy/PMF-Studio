@@ -132,3 +132,21 @@ class CancelTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpareToolTests(unittest.TestCase):
+    def test_a_missing_helper_is_put_back_and_an_existing_one_is_left_alone(self):
+        d = tempfile.mkdtemp(prefix="pmf_spare_")
+        try:
+            spare, tools = os.path.join(d, "spare"), os.path.join(d, "tools")
+            os.makedirs(spare)
+            open(os.path.join(spare, "atracdenc.exe"), "wb").write(b"spare copy")
+            self.assertEqual(paths.restore_spare("atracdenc", spare, tools), os.path.join(tools, "atracdenc.exe"))
+            self.assertEqual(open(os.path.join(tools, "atracdenc.exe"), "rb").read(), b"spare copy")
+            self.assertEqual(os.listdir(tools), ["atracdenc.exe"])                  # no .part file left
+            open(os.path.join(tools, "atracdenc.exe"), "wb").write(b"newer")
+            self.assertIsNone(paths.restore_spare("atracdenc", spare, tools))      # something is there: never overwritten
+            self.assertEqual(open(os.path.join(tools, "atracdenc.exe"), "rb").read(), b"newer")
+            self.assertIsNone(paths.restore_spare("ffmpeg", spare, tools))         # no spare for it
+        finally:
+            shutil.rmtree(d, ignore_errors=True)

@@ -14,7 +14,7 @@ import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
 from . import VERSION, STAGE, REPO, jobs, settings, updater
-from . import paths, preflight
+from . import dropfiles, paths, preflight
 from .paths import app_dir, find_tool
 from .theme import T, S, set_scale, set_theme, mix
 from .widgets import Check, FitPicker, ProgressBar, ScrollArea, Segmented, Slider, TrimBar, STATE_COLORS, clock
@@ -162,7 +162,7 @@ class App(tk.Tk):
         except tk.TclError:
             pass
 
-    def __init__(self):
+    def __init__(self, files=None):
         super().__init__()
         set_scale(self.winfo_fpixels("1i") / 96)
         self.settings = settings.load()
@@ -179,8 +179,13 @@ class App(tk.Tk):
         self.build_ui()
         self.after(100, self.pump)
         self.after(400, self.startup_checks)
+        self.updating = False
+        self.after(8000, self.clean_after_update)                                # the new version has run for a while: the old files kept aside can go
+        self.drop_problem = dropfiles.enable(self, self.on_drop)                 # files can be dragged onto the window
+        if files:
+            self.after(800, lambda: self.on_drop(list(files)))                    # files given on the command line or dropped on the program's icon
         if self.settings["auto_update"]:
-            self.after(900, self.check_updates)
+            self.after(900, lambda: self.check_updates(manual=False))
 
     def place_window(self):
         """Open at a size that suits this screen, in the middle of it."""
@@ -196,6 +201,10 @@ class App(tk.Tk):
         note = self.settings.pop("_note", None)
         if note:
             messagebox.showinfo("PMF Studio", note)
+        back = paths.restore_missing_tools()
+        if back:
+            messagebox.showinfo("PMF Studio", "%s was missing from the tools folder (an antivirus program may have removed it), so the spare copy inside PMF Studio was put back. "
+                                "If it keeps disappearing, allow it in your antivirus program." % ", ".join(n + ".exe" for n in back))
         threading.Thread(target=lambda: self.q.put(("tools", paths.check_tools())), daemon=True).start()
 
     def tools_checked(self, status):
@@ -550,13 +559,43 @@ class App(tk.Tk):
             ext = os.path.splitext(cur)[1] or (types[0][1].split()[0][1:] if types else "")
             p = filedialog.asksaveasfilename(initialdir=init, initialfile=os.path.basename(cur), defaultextension=ext, filetypes=types or [("All files", "*.*")])
         if p:
-            self.vars[key].set(os.path.normpath(p))
-            if key == "eboot":
-                self.load_eboot()
-            elif key == "src" and "out" in self.vars and self.mode == "extract":
-                self.vars["out"].set(self.out_default(os.path.splitext(os.path.basename(p))[0] + ".mp4"))
-            elif key == "sound" and self.mode == "at3" and "fmt" in self.vars and "out" in self.vars:
-                self.vars["out"].set(self.out_default(os.path.splitext(os.path.basename(p))[0] + "." + self.vars["fmt"].get()))
+            self.chosen(key, p)
+
+    def chosen(self, key, p):
+        """a file or folder was put in a box (Browse, or dragged in): fill the box and whatever follows from it"""
+        self.vars[key].set(os.path.normpath(p))
+        if key == "eboot":
+            self.load_eboot()
+        elif key == "src" and "out" in self.vars and self.mode == "extract":
+            self.vars["out"].set(self.out_default(os.path.splitext(os.path.basename(p))[0] + ".mp4"))
+        elif key == "sound" and self.mode == "at3" and "fmt" in self.vars and "out" in self.vars:
+            self.vars["out"].set(self.out_default(os.path.splitext(os.path.basename(p))[0] + "." + self.vars["fmt"].get()))
+
+    def on_drop(self, files):
+        """files dragged onto the window (or given on the command line): the page and box each belongs in are chosen for you"""
+        if self.busy:
+            messagebox.showinfo("PMF Studio", "PMF Studio is busy with a job. Drop the file again when it is done.")
+            return
+        files = [f for f in files if os.path.exists(f)]
+        page, box, path, text = dropfiles.route(files, self.mode)
+        if not page:
+            messagebox.showinfo("PMF Studio", text or "Nothing to open.")
+            return
+        if page != self.mode:
+            self.show(page)
+        if page == "player":
+            if self.player:
+                self.player.load(path)
+        else:
+            if page == "gameboot" and box in ("preview", "rco") and not self.vars["ctf"].get():
+                self.vars["ctf"].set(True)
+                self.gb_sub()
+            if page == "at3" and box == "sound" and path.lower().endswith(".at3") and self.vars["task"].get() == "make":
+                self.vars["task"].set("shrink")
+                self.at3_refresh()
+            self.chosen(box, path)
+        if self.alive(getattr(self, "status", None)):
+            self.status.configure(text=text, fg=T.muted)
 
     def tick(self, key, text, command=None, initial=False, parent=None):
         v = self.vars.setdefault(key, tk.BooleanVar(value=initial))
@@ -928,7 +967,9 @@ class App(tk.Tk):
         self.heading("Help")
         text = ("Getting started\n"
                 "Pick what you want to make on the left, choose your files, and press the button at the bottom. "
-                "Your original files are never changed.\n\n"
+                "Your original files are never changed. You can also drag files onto the window (or onto the PMF Studio icon): "
+                "a movie, an EBOOT.PBP, a PMF, a sound or a folder goes to the right page and box. "
+                "A Stop button appears while something is working.\n\n"
                 "Gameboot\n"
                 "The movie that plays when you start a game. Tick Create CTF to also get a theme file for CXMB: copy it to PSP/THEME and pick it in your PSP's theme settings. "
                 "A gameboot can't be much bigger than 3 MB, so PMF Studio lowers the quality until it fits. "
@@ -1145,6 +1186,10 @@ class App(tk.Tk):
                     if data[1]:
                         self.sound_secs[data[0]] = data[1]
                     self.trim_recompute()
+                elif kind == "upd_progress":
+                    self.update_progress(*data)
+                elif kind == "upd_done":
+                    self.update_finished(*data)
                 elif kind == "update":
                     self.after(1000, lambda r=data: self.finish_update(*r))      # the arrows spin for at least a second
         except queue.Empty:
@@ -1233,9 +1278,10 @@ class App(tk.Tk):
         self.start(jobs.at3, [("sound", "your sound file"), ("out", "where to save")], {"kbps": int(self.vars["kbps"].get().split()[0])})
 
     # ---------- updates ----------
-    def check_updates(self):
+    def check_updates(self, manual=True):
         if self.checking:
             return
+        self.update_manual = manual
         self.checking = True
         self.upbtn.set_text("Checking\u2026")
         self.upbtn.icon.start()
@@ -1248,12 +1294,121 @@ class App(tk.Tk):
         self.upbtn.icon.stop()
         if kind == "newer":
             self.reset_update()
-            if messagebox.askyesno("Update available", "PMF Studio %s is out. You have %s %s.\n\nOpen the download page?" % (info["tag"], VERSION, STAGE)):
-                import webbrowser
-                webbrowser.open(info["url"])
+            if getattr(self, "update_manual", True) or self.settings.get("skip_version") != info["tag"]:
+                self.offer_update(info)
             return
         self.upbtn.set_text("\u2713 You're up to date" if kind == "latest" else "Couldn't check for updates", OK if kind == "latest" else BAD)
         self.after(2500, self.reset_update)
+
+    def ask_update_choice(self, msg):
+        """three buttons -> "now" | "later" | "skip" """
+        result = {"v": "later"}
+        win = tk.Toplevel(self)
+        win.title("PMF Studio update")
+        win.configure(bg=T.bg)
+        win.transient(self)
+        win.resizable(False, False)
+        tk.Label(win, text=msg, bg=T.bg, fg=T.ink, font=(FONT, 10), justify="left", wraplength=S(520)).pack(padx=22, pady=(20, 12))
+        bf = tk.Frame(win, bg=T.bg)
+        bf.pack(padx=22, pady=(0, 18), anchor="e")
+
+        def pick(v):
+            result["v"] = v
+            win.destroy()
+        ttk.Button(bf, text="Update now", style="Go.TButton", command=lambda: pick("now")).pack(side="left")
+        ttk.Button(bf, text="Remind me next time", command=lambda: pick("later")).pack(side="left", padx=8)
+        ttk.Button(bf, text="Skip this version", command=lambda: pick("skip")).pack(side="left")
+        win.protocol("WM_DELETE_WINDOW", lambda: pick("later"))
+        win.update_idletasks()
+        win.geometry("+%d+%d" % (max(self.winfo_rootx() + (self.winfo_width() - win.winfo_width()) // 2, 0), self.winfo_rooty() + 120))
+        win.grab_set()
+        win.wait_window()
+        return result["v"]
+
+    def offer_update(self, info):
+        """a newer version exists: say what is new and offer to install it (or, when it can't install itself, to open the download page)"""
+        notes = (info.get("notes") or "").strip().split("\n\n")[0][:300]
+        head = "PMF Studio %s is out. You have %s %s." % (info["tag"], VERSION, STAGE) + ("\n\n" + notes if notes else "")
+        if self.busy:
+            messagebox.showinfo("PMF Studio", head + "\n\nPMF Studio is busy with a job. Click Check for updates again when it is done.")
+            return
+        problem = updater.can_install(app_dir())
+        asset = info.get("asset")
+        if problem or not asset or not asset.get("sha"):
+            why = problem or "This release has no checksum or zip that PMF Studio can install by itself."
+            if messagebox.askyesno("Update available", "%s\n\n%s\n\nOpen the download page?" % (head, why)):
+                import webbrowser
+                webbrowser.open(info["url"])
+            return
+        choice = self.ask_update_choice("%s\n\nUpdate now? PMF Studio downloads the new version (%d MB), checks it, tests it, and restarts into it. "
+                                        "Your settings and saved files stay as they are." % (head, (asset.get("size") or 0) // 1_000_000))
+        if choice == "skip":
+            self.set_option("skip_version", info["tag"])
+        elif choice == "now":
+            self.install_update(info)
+
+    def install_update(self, info):
+        """downloads, checks and tests the new version in a small window, then closes and lets the swap script do the rest"""
+        win = tk.Toplevel(self)
+        win.title("Updating PMF Studio")
+        win.configure(bg=T.bg)
+        win.transient(self)
+        win.resizable(False, False)
+        label = tk.Label(win, text="Starting\u2026", bg=T.bg, fg=T.ink, font=(FONT, 10), width=60, anchor="w")
+        label.pack(padx=22, pady=(20, 8))
+        bar = ProgressBar(win, height=10)
+        bar.pack(fill="x", padx=22)
+        stop = {"v": False}
+        btn = ttk.Button(win, text="Stop", command=lambda: stop.update(v=True))
+        btn.pack(pady=14)
+        win.protocol("WM_DELETE_WINDOW", lambda: stop.update(v=True))
+        win.update_idletasks()
+        win.geometry("+%d+%d" % (max(self.winfo_rootx() + (self.winfo_width() - win.winfo_width()) // 2, 0), self.winfo_rooty() + 140))
+        win.grab_set()
+        self.update_ui = (win, label, bar)
+        self.updating = True
+        work = tempfile.mkdtemp(prefix="update_")
+
+        def thread():
+            try:
+                script = updater.install(info["asset"], info["tag"], app_dir(), work, lambda text, f: self.q.put(("upd_progress", (text, f))),
+                                         lambda: stop["v"])
+                self.q.put(("upd_done", (script, "")))
+            except updater.UpdateError as e:
+                self.q.put(("upd_done", (None, str(e))))
+            except Exception as e:                                  # whatever goes wrong, the installed version stays as it is
+                self.last_trace = traceback.format_exc()
+                self.q.put(("upd_done", (None, "Something unexpected went wrong (%s: %s). Nothing was changed." % (type(e).__name__, e))))
+            finally:
+                shutil.rmtree(work, ignore_errors=True)
+        threading.Thread(target=thread, daemon=True).start()
+
+    def clean_after_update(self):
+        if not self.updating:                                                    # never while an update is being installed: it uses the staging folder
+            updater.cleanup_after_update(app_dir())
+
+    def update_progress(self, text, fraction):
+        win, label, bar = getattr(self, "update_ui", (None, None, None))
+        if self.alive(win):
+            label.configure(text=text)
+            bar.set(fraction)
+
+    def update_finished(self, script, error):
+        self.updating = False
+        win = getattr(self, "update_ui", (None,))[0]
+        if self.alive(win):
+            win.grab_release()
+            win.destroy()
+        if error:
+            if error != "Stopped.":
+                messagebox.showerror("PMF Studio", "The update did not go through.\n\n%s" % error)
+            return
+        self.settings["skip_version"] = ""
+        settings.save(self.settings)
+        updater.run_swap(script)                                    # it waits for this program to end, swaps the files and starts the new version
+        if self.player:
+            self.player.close()
+        self.destroy()
 
     def reset_update(self):
         if self.alive(self.upbtn):
@@ -1271,7 +1426,7 @@ def main():
     else:                                                  # a read-only folder: use the system's temp folder instead of failing
         work = None
     try:
-        App().mainloop()
+        App([a for a in sys.argv[1:] if not a.startswith("--")]).mainloop()
     finally:
         if work:
             shutil.rmtree(work, ignore_errors=True)

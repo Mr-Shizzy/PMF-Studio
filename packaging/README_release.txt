@@ -12,6 +12,10 @@ You can move or rename the folder whenever you like.
 Windows may say "Windows protected your PC" the first time, because this program isn't signed by a paid certificate.
 Choose "More info", then "Run anyway". The release page lists the SHA-256 of the zip so you can check your download.
 
+You can drag files (a movie, an EBOOT.PBP, a PMF, a sound, a folder) onto the window or onto PMF Studio.exe.
+Check for updates downloads a new version when there is one, checks it and tests it, then restarts into it. It asks first,
+keeps your settings and saved files, and puts the old version back if anything goes wrong.
+
 Your saved files go to the Output folder beside the program unless you choose another one in Options.
 Settings are kept in "PMF Studio settings.json" beside the program.
 

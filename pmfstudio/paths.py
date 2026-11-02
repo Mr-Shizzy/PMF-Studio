@@ -46,6 +46,37 @@ def sweep_temp(base, me):
             pass
 
 
+SPARE_TOOLS = ("atracdenc",)             # small helper programs with a spare copy packed inside the program (ffmpeg is too big for that)
+
+
+def restore_spare(name, spare_dir, tools_dir):
+    """put the spare copy of a helper program back in the tools folder when the file there is gone (an antivirus program can quarantine it).
+    -> the path of the restored file, or None when nothing was needed or possible"""
+    import shutil
+    src, dst = os.path.join(spare_dir, name + ".exe"), os.path.join(tools_dir, name + ".exe")
+    if os.path.isfile(dst) or not os.path.isfile(src):
+        return None
+    try:
+        os.makedirs(tools_dir, exist_ok=True)
+        shutil.copyfile(src, dst + ".part")                       # copied under another name first: a half-copied program is never left in place
+        os.replace(dst + ".part", dst)
+        return dst
+    except OSError:
+        try:
+            os.remove(dst + ".part")
+        except OSError:
+            pass
+        return None
+
+
+def restore_missing_tools():
+    """-> names of the helper programs that were missing and are back (only in the packaged program, which carries the spares)"""
+    if not getattr(sys, "frozen", False):
+        return []
+    spare = os.path.join(getattr(sys, "_MEIPASS", os.path.join(app_dir(), "_internal")), "spare")
+    return [n for n in SPARE_TOOLS if restore_spare(n, spare, os.path.join(app_dir(), "tools"))]
+
+
 def asset(name):
     """a picture shipped with the program (pmfstudio/assets; the release packs the same folder), or None if it is missing"""
     p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", name)

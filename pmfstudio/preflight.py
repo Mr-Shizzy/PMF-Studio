@@ -159,14 +159,15 @@ def check_space(items):
 
 
 def check_memory(mode, v, tools):
-    """a very long C-Intro is built in memory (the picture, then the whole movie file): refuse when it can't fit, with advice"""
+    """a C-Intro movie is written piece by piece, so length doesn't matter; the sound (about 16 KB a second, held a few times over) and a
+    working margin are what is needed: refuse only when even that can't fit, with advice"""
     if mode != "cintro":
         return
     secs = _seconds(v, tools, "movie")
     avail = free_ram()
     if not secs or not avail:
         return
-    need = int(secs * 270_000 * 2.5)
+    need = int(secs * 16_000 * 3) + 250_000_000
     if need > 400_000_000 and need > avail * 0.8:
         raise BuildError("This movie is too long to build with the memory free right now: it needs about %s and %s is free. "
                          "Close other programs, or pick a shorter part with the strip above." % (fmt(need), fmt(avail)))

@@ -22,6 +22,10 @@ More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/s
 - **Player**: plays PMF movies and sounds inside the program, with full screen.
 - Picks the part of a long movie that fits (a strip with a block you drag), keeps the best quality the size limit allows, shows a
   progress bar for everything that takes time, light and dark themes.
+- Drag and drop: drop a movie, EBOOT.PBP, PMF, sound or folder on the window (or on the exe) and it lands in the right box.
+- Stop button, checks before a job (free space, odd names, saving over your own file), working files cleaned up.
+- Updates itself when you ask: downloads the new release, verifies its SHA-256, tests it, swaps it in, and rolls back if that fails.
+- C-Intro movies of any length: written to disk a piece at a time, so a 2-hour movie needs no more memory than a 2-minute one.
 - Portable: it saves nothing outside its own folder, and you can move or rename the folder.
 
 ## Download and use
