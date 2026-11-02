@@ -61,6 +61,25 @@ class ShrinkMovieTests(unittest.TestCase):
         self.assertLess(len(a1), len(a0) * 0.7)
         self.assertLess(r.after, r.before)
 
+    def test_keep_the_picture_and_change_only_the_sound(self):
+        out = os.path.join(self.dir, "sound_only.pmf")
+        r = shrink.shrink(self.pmf, out, FFMPEG, ATRAC, ratio=1.0, sound_kbps=32)[0]
+        _, v0, a0, _ = demux(open(self.pmf, "rb").read())
+        _, v1, a1, _ = demux(open(out, "rb").read())
+        self.assertEqual(v1, v0)                                              # the picture data is untouched
+        self.assertLess(len(a1), len(a0) * 0.4)
+        self.assertLess(r.after, r.before)
+        self.assertIn("picture kept", r.note)
+
+    def test_survey_and_prediction(self):
+        info = shrink.survey(self.pmf)
+        self.assertEqual(info.count, 1)
+        self.assertGreater(info.picture_kbps, 500)
+        self.assertAlmostEqual(info.sound_kbps, 128, delta=15)
+        self.assertLess(shrink.predict(info, 0.5), info.total * 0.7)
+        self.assertLess(shrink.predict(info, 0.5, 32), shrink.predict(info, 0.5))
+        self.assertEqual(shrink.predict(info, 1.0), info.total)
+
     def test_a_movie_that_cannot_get_smaller_is_copied_and_a_bad_file_is_reported(self):
         tiny = os.path.join(self.dir, "tiny_in")
         os.makedirs(tiny)

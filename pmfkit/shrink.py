@@ -45,31 +45,46 @@ def find_movies(path):
     return sorted(found, key=lambda t: t[1].lower())
 
 
-def estimate(path, ratio, sound_kbps=None, samples=3):
-    """a quick guess before the work starts -> (number of movies, their total bytes, bytes after shrinking).
-    Looks inside a few of the movies to see how much of a file is sound (the sound stays the same size unless sound_kbps is given)."""
+class Survey:
+    """what a folder of movies looks like, read from the biggest few: how many, how big, and the picture and sound bitrates (kbps) they have now"""
+
+    def __init__(self, count=0, total=0, picture_kbps=0, sound_kbps=0, sound_share=0.0):
+        self.count, self.total, self.picture_kbps, self.sound_kbps, self.sound_share = count, total, picture_kbps, sound_kbps, sound_share
+
+
+def survey(path, samples=3):
     movies = find_movies(path)
-    sizes = [os.path.getsize(p) for p, _ in movies]
-    total = sum(sizes)
     if not movies:
-        return 0, 0, 0
+        return Survey()
+    sizes = [os.path.getsize(p) for p, _ in movies]
     picked = sorted(range(len(movies)), key=lambda i: -sizes[i])[:samples]
-    share_sum = weight = 0
+    vbits = abits = secs = asecs = abytes = weight = 0
     for i in picked:
         try:
             raw = load_pmf(movies[i][0])
             _, video, audio, _ = demux(raw)
-            seconds = duration_seconds(video, audio)
-            audio_bytes = len(audio)
-            if sound_kbps and audio and audio_bytes * 8 / max(seconds, 0.1) / 1000 > sound_kbps + 4:
-                audio_bytes = int(audio_bytes * sound_kbps / (audio_bytes * 8 / max(seconds, 0.1) / 1000))
-            share_sum += (len(raw) - len(audio)) * ratio + audio_bytes
-            weight += len(raw)
         except (ValueError, OSError):
             continue
-    if not weight:
-        return len(movies), total, int(total * ratio)
-    return len(movies), total, int(total * share_sum / weight)
+        seconds = max(duration_seconds(video, audio), 0.1)
+        vbits += len(video) * 8
+        abits += len(audio) * 8
+        asecs += seconds if audio else 0
+        secs += seconds
+        abytes += len(audio)
+        weight += len(raw)
+    if not secs:
+        return Survey(len(movies), sum(sizes))
+    return Survey(len(movies), sum(sizes), vbits / secs / 1000, abits / max(asecs, 0.1) / 1000, abytes / max(weight, 1))
+
+
+def predict(info, ratio, sound_kbps=None):
+    """bytes after shrinking, a guess from a Survey: the picture part scales with the ratio, the sound part with the new sound bitrate"""
+    if not info.total:
+        return 0
+    sound = info.sound_share
+    if sound_kbps and info.sound_kbps > sound_kbps + 4:
+        sound = sound * sound_kbps / info.sound_kbps
+    return int(info.total * ((1 - info.sound_share) * min(ratio, 1.0) + sound))
 
 
 def _reencode(ffmpeg, es_in, es_out, seconds, kbps, gop, bframes, bufsize):
@@ -109,9 +124,10 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
     before = len(raw)
     old_kbps = len(video) * 8 / max(seconds, 0.1) / 1000
     kbps = max(FLOOR_KBPS, int(old_kbps * ratio))
-    if kbps >= old_kbps * 0.95:
+    keep_picture = ratio >= 0.999 or kbps >= old_kbps * 0.95              # nothing to take from the picture: only the sound can change
+    if keep_picture and not (audio and sound_kbps and atracdenc):
         shutil.copyfile(src, dst) if os.path.abspath(src) != os.path.abspath(dst) else None
-        return ShrinkResult(src, dst, before, before, "already small: copied as it is")
+        return ShrinkResult(src, dst, before, before, "nothing to change: copied as it is")
     version = params.version if params.version in HEADER_KIB else "0012"
     style = "A" if params.video_buffer_kib >= 400 else "B"
     work = tempfile.mkdtemp(prefix="pmfshrink_")
@@ -126,7 +142,15 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
         gop = 59
         bufsize = int(kbps * 1.5)
         best = None
-        for attempt in range(4):
+        if keep_picture:
+            if new_audio is None:
+                shutil.copyfile(src, dst) if os.path.abspath(src) != os.path.abspath(dst) else None
+                return ShrinkResult(src, dst, before, before, "the sound is already that low: copied as it is")
+            # the picture goes back in exactly as it was (the game's own stream: no PSP check needed), only the sound is new
+            with PROGRESS.stage(0.2, 0.95, "Putting the movie together…"):
+                best = mux(video, sound, version=version, style=style, width=params.width, height=params.height, allow_b=True, strict=False)
+            kbps = old_kbps
+        for attempt in range(0 if keep_picture else 4):
             lo = 0.2 + 0.7 * attempt / 4
             with PROGRESS.stage(lo, lo + 0.7 / 4, "Making the picture smaller…" if attempt == 0 else "Adjusting…"):
                 _reencode(ffmpeg, es_in, es_out, seconds, kbps, gop, bframes, bufsize)
@@ -150,12 +174,15 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
         problem = _check(raw, best, new_audio is None)
         if problem:
             raise ValueError("The smaller movie did not pass the check (%s), so nothing was written." % problem)
-        if len(best) > before * (1 - MIN_GAIN):
+        if len(best) > before * (1 - (0.0 if keep_picture else MIN_GAIN)) or len(best) >= before:           # a sound asked for by name is kept if it saves anything
             shutil.copyfile(src, dst) if os.path.abspath(src) != os.path.abspath(dst) else None
             return ShrinkResult(src, dst, before, before, "would not get smaller: copied as it is")
         open(dst, "wb").write(best)
         PROGRESS.report(1.0)
-        return ShrinkResult(src, dst, before, len(best), "picture %d -> %d kbps" % (old_kbps, kbps))
+        note = "picture kept" if keep_picture else "picture %d -> %d kbps" % (old_kbps, kbps)
+        if new_audio is not None:
+            note += ", sound %d -> %d kbps" % (atrac3p.from_units(audio).kbps, new_audio.kbps)
+        return ShrinkResult(src, dst, before, len(best), note)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

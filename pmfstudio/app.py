@@ -671,7 +671,7 @@ class App(tk.Tk):
             self.note("This sound replaces the icon movie's own sound. They never play together, and they share 512 KB, so a long sound means a smaller picture.", warn=True, parent=self.sep_holder)
 
     def page_shrink(self):
-        self.heading("Shrink game movies", "Make a game's own movie files (.pmf) smaller, so the game takes less room. They keep their names, picture size and length.")
+        self.heading("Shrink game movies", "Make a game's own movie files (.pmf) smaller, so the game takes less room. Each movie keeps its name, picture size and length.")
         f = tk.Frame(self.main, bg=T.bg)
         f.pack(fill="x", pady=3)
         self.label_cell(f, "Movies")
@@ -680,22 +680,31 @@ class App(tk.Tk):
         ttk.Button(f, text="A movie", command=lambda: self.pick_movies(False)).pack(side="left", padx=(0, 6))
         ttk.Button(f, text="A folder", command=lambda: self.pick_movies(True)).pack(side="left")
         self.shrink_info = tk.Label(self.main, text="Pick one movie, or a whole folder of them.", bg=T.bg, fg=T.muted, font=(FONT, 10), anchor="w", justify="left", wraplength=S(700))
-        self.shrink_info.pack(fill="x", pady=(0, 6))
-        f = tk.Frame(self.main, bg=T.bg)
-        f.pack(fill="x", pady=(6, 3))
-        tk.Label(f, text="How small", width=14, anchor="w", bg=T.bg, fg=T.ink, font=(FONT, 10)).pack(side="left")
-        self.vars["amount"] = tk.StringVar(value="much")
-        Segmented(f, [("smaller", "A bit smaller"), ("much", "About half"), ("tiny", "Much smaller")], self.vars["amount"], self.shrink_refresh).pack(side="left")
-        self.tick("sound_small", "Make the sound smaller too", self.shrink_refresh)
+        self.shrink_info.pack(fill="x", pady=(0, 8))
+        self.vars["picture"] = tk.StringVar(value="0.5")
+        self.vars["sound"] = tk.StringVar(value="keep")
+        self.picture_holder = tk.Frame(self.main, bg=T.bg)
+        self.picture_holder.pack(fill="x")
+        self.picture_note = tk.Label(self.main, text="", bg=T.bg, fg=T.muted, font=(FONT, 9), anchor="w", justify="left", wraplength=S(700))
+        self.picture_note.pack(fill="x", pady=(2, 8))
         self.sound_holder = tk.Frame(self.main, bg=T.bg)
         self.sound_holder.pack(fill="x")
+        self.sound_note = tk.Label(self.main, text="", bg=T.bg, fg=T.muted, font=(FONT, 9), anchor="w", justify="left", wraplength=S(700))
+        self.sound_note.pack(fill="x", pady=(2, 8))
+        self.shrink_result = tk.Label(self.main, text="", bg=T.bg, fg=T.ink, font=(FONT, 10, "bold"), anchor="w")
+        self.shrink_result.pack(fill="x", pady=(0, 4))
         self.row("out", "Save to folder", "dir", initial=self.out_default("Shrunk movies"))
         self.note("Your originals are never changed: the smaller movies go to the folder above with the same names. "
                   "Always try one of them in your game before you use them all.")
         self.footer("Shrink", self.run_shrink, bar=False)
         self.vars["src"].trace_add("write", lambda *a: self.shrink_typed())
         self.shrink_job = None
-        self.shrink_refresh()
+        self.shrink_info_data = None
+        self.shrink_survey(True)
+
+    PICTURE_CHOICES = (("1.0", "As it is"), ("0.75", "75%"), ("0.5", "50%"), ("0.4", "40%"), ("0.3", "30%"), ("0.2", "20%"))
+    SOUND_WORDS = {"keep": "no change", "128": "high quality", "96": "good", "64": "okay", "48": "thin", "32": "lowest"}
+    SOUND_CHOICES = (("keep", "As it is"), ("128", "128 kbps"), ("96", "96 kbps"), ("64", "64 kbps"), ("48", "48 kbps"), ("32", "32 kbps"))
 
     def pick_movies(self, folder):
         cur = self.vars["src"].get()
@@ -707,39 +716,82 @@ class App(tk.Tk):
     def shrink_typed(self):
         if self.shrink_job:
             self.after_cancel(self.shrink_job)
-        self.shrink_job = self.after(500, self.shrink_refresh)
+        self.shrink_job = self.after(500, lambda: self.shrink_survey(True))
 
-    def shrink_refresh(self):
-        """the sound choice appears with its tick; the line under the movies says how many there are and what they should come to"""
+    def shrink_survey(self, reread):
+        """looks at the chosen movies (their picture and sound bitrates), then draws the choices with real numbers"""
         from pmfkit import shrink
         self.shrink_job = None
-        if not self.alive(getattr(self, "sound_holder", None)):
+        if not self.alive(getattr(self, "picture_holder", None)):
             return
-        for w in self.sound_holder.winfo_children():
-            w.destroy()
-        if self.vars["sound_small"].get():
-            f = tk.Frame(self.sound_holder, bg=T.bg)
-            f.pack(fill="x", pady=(2, 4))
-            tk.Label(f, text="Sound quality", width=14, anchor="w", bg=T.bg, fg=T.ink, font=(FONT, 10)).pack(side="left")
-            if "sound_kbps" not in self.vars:
-                self.vars["sound_kbps"] = tk.StringVar(value="96 kbps")
-            Segmented(f, [(k, k) for k in KBPS[::-1]], self.vars["sound_kbps"], self.shrink_refresh).pack(side="left")
-            tk.Label(self.sound_holder, text="Lower is smaller. A sound that is already lower than this is left alone.", bg=T.bg, fg=T.muted, font=(FONT, 9), anchor="w").pack(fill="x")
         path = self.vars["src"].get().strip()
-        if not path:
-            self.shrink_info.configure(text="Pick one movie, or a whole folder of them.", fg=T.muted)
-        elif not os.path.exists(path):
-            self.shrink_info.configure(text="Can't find that movie or folder.", fg=BAD)
-        else:
-            sound = int(self.vars["sound_kbps"].get().split()[0]) if self.vars["sound_small"].get() else None
-            try:
-                count, total, after = shrink.estimate(path, shrink.RATIOS[self.vars["amount"].get()], sound)
-            except OSError:
-                count = 0
-            if not count:
-                self.shrink_info.configure(text="There are no .pmf movies there.", fg=BAD)
+        if reread:
+            self.shrink_info_data = None
+            if not path:
+                self.shrink_info.configure(text="Pick one movie, or a whole folder of them.", fg=T.muted)
+            elif not os.path.exists(path):
+                self.shrink_info.configure(text="Can't find that movie or folder.", fg=BAD)
             else:
-                self.shrink_info.configure(text="%d movie%s, %s. After shrinking: about %s." % (count, "" if count == 1 else "s", self.fmt(total), self.fmt(after)), fg=T.ink)
+                try:
+                    self.shrink_info_data = shrink.survey(path)
+                except OSError:
+                    self.shrink_info_data = None
+                info = self.shrink_info_data
+                if not info or not info.count:
+                    self.shrink_info_data = None
+                    self.shrink_info.configure(text="There are no .pmf movies there.", fg=BAD)
+                else:
+                    self.shrink_info.configure(text="%d movie%s, %s. Now: picture about %s kbps, sound about %s kbps." % (
+                        info.count, "" if info.count == 1 else "s", self.fmt(info.total), format(int(info.picture_kbps), ","), int(info.sound_kbps)), fg=T.ink)
+        self.shrink_draw()
+
+    def shrink_draw(self):
+        """the two rows of choices; each picture choice shows the picture bitrate it gives for these movies"""
+        from pmfkit import shrink
+        info = self.shrink_info_data
+        for holder in (self.picture_holder, self.sound_holder):
+            for w in holder.winfo_children():
+                w.destroy()
+        f = tk.Frame(self.picture_holder, bg=T.bg)
+        f.pack(fill="x", pady=3)
+        tk.Label(f, text="Picture", width=14, anchor="nw", bg=T.bg, fg=T.ink, font=(FONT, 10, "bold")).pack(side="left", anchor="n", pady=(S(6), 0))
+        options = []
+        for value, name in self.PICTURE_CHOICES:
+            if info and info.picture_kbps:
+                second = "no change" if value == "1.0" else "%s kbps" % format(max(shrink.FLOOR_KBPS, int(info.picture_kbps * float(value))), ",")
+            else:
+                second = "no change" if value == "1.0" else "of what it is now"
+            options.append((value, "%s\n%s" % (name, second)))
+        Segmented(f, options, self.vars["picture"], self.shrink_texts, pad=12).pack(side="left")
+        f = tk.Frame(self.sound_holder, bg=T.bg)
+        f.pack(fill="x", pady=3)
+        tk.Label(f, text="Sound", width=14, anchor="nw", bg=T.bg, fg=T.ink, font=(FONT, 10, "bold")).pack(side="left", anchor="n", pady=(S(6), 0))
+        Segmented(f, [(v, "%s\n%s" % (n, self.SOUND_WORDS[v])) for v, n in self.SOUND_CHOICES], self.vars["sound"], self.shrink_texts, pad=12).pack(side="left")
+        self.shrink_texts()
+
+    def shrink_texts(self):
+        """the sentences under the choices say what will actually happen; the last line is the size to expect"""
+        from pmfkit import shrink
+        info = self.shrink_info_data
+        ratio = float(self.vars["picture"].get())
+        now = "%s kbps" % format(int(info.picture_kbps), ",") if info and info.picture_kbps else "what it is now"
+        if ratio >= 0.999:
+            self.picture_note.configure(text="The picture is left exactly as it is.")
+        else:
+            then = " to about %s kbps" % format(max(shrink.FLOOR_KBPS, int(info.picture_kbps * ratio)), ",") if info and info.picture_kbps else ""
+            self.picture_note.configure(text="The picture is encoded again with %d%% of its data (from about %s%s). Less data makes a smaller file and a softer picture." % (
+                round(ratio * 100), now, then))
+        sound = self.vars["sound"].get()
+        if sound == "keep":
+            self.sound_note.configure(text="The sound is kept exactly as it is.")
+        else:
+            was = " (now about %d kbps)" % int(info.sound_kbps) if info and info.sound_kbps else ""
+            self.sound_note.configure(text="The sound is encoded again at %s kbps%s. Lower is smaller and flatter; a sound that is already lower stays as it is." % (sound, was))
+        if info:
+            after = shrink.predict(info, ratio, int(sound) if sound != "keep" else None)
+            self.shrink_result.configure(text="After shrinking: about %s (now %s)." % (self.fmt(after), self.fmt(info.total)))
+        else:
+            self.shrink_result.configure(text="")
 
     def run_shrink(self):
         self.start(jobs.shrink, [("src", "a movie or a folder of movies"), ("out", "the folder to save in")])
@@ -869,7 +921,8 @@ class App(tk.Tk):
                 "A movie for the C-Intro plugin. There is no size limit.\n\n"
                 "Shrink game movies\n"
                 "Makes the .pmf movies of a game smaller so the game takes less room. Pick one movie or a whole folder. Each smaller movie keeps its name, picture size and length, "
-                "and goes to another folder: your originals are never changed. The sound is kept exactly as it is, unless you tick Make the sound smaller too. "
+                "and goes to another folder: your originals are never changed. You choose how much data the picture keeps and the quality of the sound (or leave either as it is); "
+                "the page shows the picture and sound bitrates of your movies and what each choice gives. "
                 "Try one movie in your game before you use them all.\n\n"
                 "EBOOT icon\n"
                 "The small movie that plays in the XMB when you highlight a game. It's saved into a copy of the game's EBOOT. "

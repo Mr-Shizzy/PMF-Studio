@@ -185,11 +185,11 @@ class Check(tk.Frame):
 class Segmented(tk.Frame):
     """Two or three choices side by side; the chosen one is filled."""
 
-    def __init__(self, parent, options, variable, command=None):
+    def __init__(self, parent, options, variable, command=None, pad=18):
         super().__init__(parent, bg=T.line, padx=1, pady=1)
         self.var, self.command, self.items = variable, command, {}
         for value, text in options:
-            lab = tk.Label(self, text=text, font=(FONT, 10), padx=S(18), pady=S(6), cursor="hand2")
+            lab = tk.Label(self, text=text, font=(FONT, 10), padx=S(pad), pady=S(6), cursor="hand2")
             lab.pack(side="left")
             lab.bind("<Button-1>", lambda e, v=value: self.choose(v))
             self.items[value] = lab

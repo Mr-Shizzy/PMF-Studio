@@ -151,9 +151,9 @@ def shrink(v, tools, emit):
         dest = os.path.join(out, os.path.basename(src))
         if os.path.normcase(dest) == os.path.normcase(src):
             raise cli.BuildError("Save the smaller movie in a different folder. PMF Studio never replaces your originals.")
-    argv = ["shrink", src, "-o", dest, "--ffmpeg", tools["ffmpeg"], "--amount", v.get("amount", "much")]
-    if v.get("sound_small"):
-        argv += ["--atracdenc", tools["atracdenc"], "--sound-kbps", str(int(v.get("sound_kbps", "96 kbps").split()[0]))]
+    argv = ["shrink", src, "-o", dest, "--ffmpeg", tools["ffmpeg"], "--amount", str(v.get("picture", "0.5"))]
+    if v.get("sound", "keep") != "keep":
+        argv += ["--atracdenc", tools["atracdenc"], "--sound-kbps", str(int(v["sound"]))]
     run(argv, emit)
 
 

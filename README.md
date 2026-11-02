@@ -16,7 +16,7 @@ More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/s
 - **C-Intro**: a movie for the C-Intro boot plugin.
 - **EBOOT icon**: changes the icon movie, the sound, the pictures and the title in a copy of a game's EBOOT.
 - **Shrink game movies**: makes a game's own `.pmf` movies smaller (one movie or a whole folder): same names, picture size and
-  length, the picture re-encoded at a lower bitrate, the sound kept as it is or shrunk too. Every result is checked before it is saved.
+  length, you choose how much of the picture's bitrate to keep (100% to 20%, shown in kbps for your movies) and the sound quality (as it is, or 128 down to 32 kbps). Every result is checked before it is saved.
 - **AT3 Tools**: make an AT3 from any sound, shrink an AT3 from a game, or turn an AT3 into a WAV or MP3.
 - **Extract**: takes any PMF apart into an MP4 (and its sound as AT3 and WAV).
 - **Player**: plays PMF movies and sounds inside the program, with full screen.
