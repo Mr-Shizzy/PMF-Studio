@@ -1,0 +1,187 @@
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index d34fd4a..c17d26b 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -72,12 +72,7 @@ if (ATRACDENC_PCM_IO_BACKEND STREQUAL "mediafoundation")
+ 		platform/win/pcm_io/pcm_io.cpp
+     )
+ else()
+-    INCLUDE(FindLibSndFile)
+-    if (NOT LIBSNDFILE_FOUND)
+-        message(FATAL_ERROR "libsndfile PCM I/O backend requires libsndfile")
+-    endif()
+-    include_directories(${LIBSNDFILE_INCLUDE_DIR})
+-    set(PCM_IO_LIBRARIES ${SNDFILE_LIBRARIES})
++
+     set(SOURCE_PCM_IO_LIB
+         pcm_io_sndfile.cpp
+     )
+diff --git a/src/pcm_io_sndfile.cpp b/src/pcm_io_sndfile.cpp
+index 1baeff9..01fc545 100644
+--- a/src/pcm_io_sndfile.cpp
++++ b/src/pcm_io_sndfile.cpp
+@@ -1,127 +1,47 @@
+-/*
+- * This file is part of AtracDEnc.
+- *
+- * AtracDEnc is free software; you can redistribute it and/or
+- * modify it under the terms of the GNU Lesser General Public
+- * License as published by the Free Software Foundation; either
+- * version 2.1 of the License, or (at your option) any later version.
+- *
+- * AtracDEnc is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+- * Lesser General Public License for more details.
+- *
+- * You should have received a copy of the GNU Lesser General Public
+- * License along with AtracDEnc; if not, write to the Free Software
+- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+- */
+-
++// Scratchpad-only minimal PCM16 WAV backend (replaces libsndfile for this test build).
+ #include "wav.h"
+-
+-#include "utf8_file.h"
+-
+-#include <sndfile.hh>
+-#include <algorithm>
++#include <cstdio>
++#include <cstdint>
++#include <cstring>
+ #include <stdexcept>
++#include <string>
++#include <vector>
+ 
+-static int fileext_to_libsndfmt(const std::string& filename) {
+-    int fmt = SF_FORMAT_WAV; //default fmt
+-    if (filename == "-")
+-        return SF_FORMAT_AU;
+-    size_t pos = filename.find_last_of(".");
+-    if (pos == std::string::npos || pos == filename.size() - 1) //no dot or filename.
+-        return fmt;
+-    std::string ext = filename.substr(pos+1);
+-    std::transform(ext.begin(), ext.end(), ext.begin(), ::toupper);
+-    if (ext == "AU") {
+-        fmt = SF_FORMAT_AU;
+-    } else if (ext == "AIFF") {
+-        fmt = SF_FORMAT_AIFF;
+-    } else if (ext == "PCM" || ext == "RAW") {
+-        fmt = SF_FORMAT_RAW;
+-    }
+-    return fmt;
+-}
+-
+-static SndfileHandle OpenSndFileRead(const std::string& filename) {
+-#ifdef _WIN32
+-    const std::wstring wpath = NAtracDEnc::Utf8ToWidePath(filename);
+-    return SndfileHandle(wpath.c_str());
+-#else
+-    return SndfileHandle(filename);
+-#endif
+-}
+-
+-static SndfileHandle OpenSndFileWrite(const std::string& filename, int channels, int sampleRate) {
+-    const int format = fileext_to_libsndfmt(filename) | SF_FORMAT_PCM_16;
+-#ifdef _WIN32
+-    const std::wstring wpath = NAtracDEnc::Utf8ToWidePath(filename);
+-    return SndfileHandle(wpath.c_str(), SFM_WRITE, format, channels, sampleRate);
+-#else
+-    return SndfileHandle(filename, SFM_WRITE, format, channels, sampleRate);
+-#endif
+-}
+-
+-static void CheckSndFileOpen(SndfileHandle& file, const std::string& path, const char* mode) {
+-    if (file.rawHandle()) {
+-        return;
+-    }
+-
+-    std::string msg = "unable to open ";
+-    msg += mode;
+-    msg += " file '";
+-    msg += path;
+-    msg += "'";
+-
+-    if (file) {
+-        const char* err = file.strError();
+-        if (err && err[0]) {
+-            msg += ": ";
+-            msg += err;
+-        }
+-    }
+-
+-    throw std::runtime_error(msg);
+-}
+-
+-class TPCMIOSndFile : public IPCMProviderImpl {
+-public:
+-    TPCMIOSndFile(const std::string& filename)
+-        : File(OpenSndFileRead(filename))
+-    {
+-        CheckSndFileOpen(File, filename, "input");
+-        File.command(SFC_SET_NORM_DOUBLE /*| SFC_SET_NORM_FLOAT*/, nullptr, SF_TRUE);
+-    }
+-    TPCMIOSndFile(const std::string& filename, int channels, int sampleRate)
+-        : File(OpenSndFileWrite(filename, channels, sampleRate))
+-    {
+-        CheckSndFileOpen(File, filename, "output");
+-        File.command(SFC_SET_NORM_DOUBLE /*| SFC_SET_NORM_FLOAT*/, nullptr, SF_TRUE);
+-    }
++class TPCMIOMini : public IPCMProviderImpl {
++    FILE* F = nullptr; bool W = false;
++    size_t Ch = 0, Rate = 0, Frames = 0; long DataPos = 0; uint64_t Written = 0;
++    static void w32(FILE* f, uint32_t v){ fwrite(&v,4,1,f);} static void w16(FILE* f, uint16_t v){ fwrite(&v,2,1,f);}
+ public:
+-    size_t GetChannelsNum() const override {
+-        return File.channels();
++    TPCMIOMini(const std::string& fn) {
++        F = fopen(fn.c_str(), "rb"); if(!F) throw std::runtime_error("cannot open input " + fn);
++        char id[4]; uint32_t sz; fread(id,1,4,F); fread(&sz,4,1,F); fread(id,1,4,F);
++        if(memcmp(id,"WAVE",4)) throw std::runtime_error("not WAVE");
++        uint16_t fmt=0,ch=0,bits=0; uint32_t rate=0;
++        while(fread(id,1,4,F)==4 && fread(&sz,4,1,F)==1){
++            if(!memcmp(id,"fmt ",4)){ fread(&fmt,2,1,F); fread(&ch,2,1,F); fread(&rate,4,1,F); fseek(F,6,SEEK_CUR); fread(&bits,2,1,F); fseek(F,sz-16+(sz&1),SEEK_CUR);}
++            else if(!memcmp(id,"data",4)){ if(fmt!=1||bits!=16) throw std::runtime_error("need PCM16"); Ch=ch; Rate=rate; Frames=sz/(2*ch); DataPos=ftell(F); return; }
++            else fseek(F,sz+(sz&1),SEEK_CUR);
++        }
++        throw std::runtime_error("no data chunk");
+     }
+-    size_t GetSampleRate() const override {
+-        return File.samplerate();
++    TPCMIOMini(const std::string& fn, int ch, int rate) : W(true), Ch(ch), Rate(rate) {
++        F = fopen(fn.c_str(), "wb"); if(!F) throw std::runtime_error("cannot open output " + fn);
++        fwrite("RIFF",1,4,F); w32(F,0); fwrite("WAVEfmt ",1,8,F); w32(F,16); w16(F,1); w16(F,ch); w32(F,rate); w32(F,rate*ch*2); w16(F,ch*2); w16(F,16);
++        fwrite("data",1,4,F); w32(F,0);
+     }
+-    size_t GetTotalSamples() const override {
+-        return File.frames();
++    ~TPCMIOMini() override {
++        if(F && W){ uint32_t d=(uint32_t)(Written*Ch*2); fseek(F,4,SEEK_SET); w32(F,36+d); fseek(F,40,SEEK_SET); w32(F,d);} if(F) fclose(F);
+     }
++    size_t GetChannelsNum() const override { return Ch; }
++    size_t GetSampleRate() const override { return Rate; }
++    size_t GetTotalSamples() const override { return Frames; }
+     size_t Read(TPCMBuffer& buf, size_t sz) override {
+-        return File.readf(buf[0], sz);
+-    }
++        std::vector<int16_t> t(sz*Ch); size_t n=fread(t.data(),2*Ch,sz,F); float* o=buf[0];
++        for(size_t i=0;i<n*Ch;i++) o[i]=t[i]/32768.0f; return n; }
+     size_t Write(const TPCMBuffer& buf, size_t sz) override {
+-        return File.writef(buf[0], sz);
+-    }
+-private:
+-    mutable SndfileHandle File;
++        std::vector<int16_t> t(sz*Ch); const float* in=buf[0];
++        for(size_t i=0;i<sz*Ch;i++){ float v=in[i]*32768.0f; if(v>32767)v=32767; if(v<-32768)v=-32768; t[i]=(int16_t)v; }
++        fwrite(t.data(),2*Ch,sz,F); Written+=sz; return sz; }
+ };
+-
+-IPCMProviderImpl* CreatePCMIOReadImpl(const std::string& path) {
+-    return new TPCMIOSndFile(path); 
+-}
+-
+-IPCMProviderImpl* CreatePCMIOWriteImpl(const std::string& path, int channels, int sampleRate) {
+-    return new TPCMIOSndFile(path, channels, sampleRate);
+-}
++IPCMProviderImpl* CreatePCMIOReadImpl(const std::string& p){ return new TPCMIOMini(p); }
++IPCMProviderImpl* CreatePCMIOWriteImpl(const std::string& p,int c,int r){ return new TPCMIOMini(p,c,r); }

@@ -1,0 +1,58 @@
+Mr. Shizzy - GameBoots Pack 1/
+Things to refrence/
+reference_from_golf_project/original_pmfs_DO_NOT_COMMIT/
+__pycache__/
+*.pyc
+tools/atracdenc/bin/
+ICON1 samples/
+test_output/icon1/I1_deathjr_remux.pmf
+test_output/icon1/I2_bomberman_remux.pmf
+EBOOT samples/
+test_output/xmb_batch/
+test_output/xmb_batch2/
+test_output/xmb_batch3/
+test_output/xmb_batch4/
+test_output/xmb_batch5/
+test_output/xmb_batch6/
+test_output/xmb_batch7/
+test_output/xmb_batch8/
+test_output/xmb_batch9/
+test_output/xmb_batch10/
+test_output/xmb_batch11/
+test_output/xmb_batch12/
+test_output/long_test/
+test_output/long_full/
+test_output/stress/
+test_output/bframes/
+test_output/bgain/
+test_output/gameboot/
+Commercial PMF samples/
+CTFtool_GUI_v5_beta_3/
+God Of War 660 theme example/
+PSP Theme Toolbox (SONY Official PTF theme maker)/
+test_output/ctf/
+test_output/ctf2/
+test_output/ctf3/
+test_output/ctf4/
+CTF files/
+test_output/rco/
+Mps TO Pmf Final/
+reference_from_golf_project/
+My Personal Notes On Making PMF Files.txt
+test_output/
+
+# PMF Studio runtime files (beside the program)
+temp/
+Output/
+PMF Studio settings.json
+
+# release building
+packaging/cache/
+build/
+release/
+selftest_result.txt
+
+# working notes and drafts stay local until the owner has reviewed them for publishing
+HANDOFF.md
+RESEARCH_NOTES.md
+forum_post_*.txt

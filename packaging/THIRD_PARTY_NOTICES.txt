@@ -1,0 +1,39 @@
+PMF Studio - third-party notices
+================================
+
+PMF Studio itself is copyright (C) 2026 Mr-Shizzy and released under the GNU General Public License, version 3 (see LICENSE).
+Its source code is at https://github.com/Mr-Shizzy/PMF-Studio (the tag of each release holds the source of that release).
+
+The release folder also contains programs and libraries made by other people. They keep their own licences. PMF Studio starts
+FFmpeg and atracdenc as separate programs (it does not link to them), so their licences apply to those programs only.
+
+
+FFmpeg  (tools\ffmpeg.exe)
+--------------------------
+Version: see "ffmpeg -version" (the release notes name the exact build).
+Build:   the "essentials" Windows build by Gyan Doshi (gyan.dev), published at https://github.com/GyanD/codexffmpeg
+Licence: GNU General Public License version 3 or later (this build includes GPL libraries such as x264). The licence text is
+         in licenses\ffmpeg-LICENSE.txt, and the build's own README is in licenses\ffmpeg-README.txt.
+Source:  FFmpeg source code: https://ffmpeg.org/download.html . The build scripts and the list of libraries that went into this
+         build: https://github.com/GyanD/codexffmpeg . PMF Studio has not modified FFmpeg.
+The build contains further libraries under their own licences (for example x264 - GPL, LAME - LGPL); "ffmpeg -L" prints them.
+
+
+atracdenc  (tools\atracdenc.exe)
+--------------------------------
+An open ATRAC3plus encoder by Daniil Cherednik and contributors: https://github.com/dcherednik/atracdenc
+Licence: GNU Lesser General Public License version 2.1 (licenses\atracdenc-LICENSE-LGPL-2.1.txt).
+Source:  the upstream commit named in source\atracdenc\BASE_COMMIT.txt, plus three small patches made for PMF Studio, which are
+         included in source\atracdenc\ (the patches are under the same LGPL-2.1 licence). source\atracdenc\README.txt gives the exact
+         build commands. The program you have was built from that source with those commands.
+
+
+Python  (the PMF Studio program and its _internal folder)
+---------------------------------------------------------
+PMF Studio is written in Python and packaged with PyInstaller. The Python runtime is under the Python Software Foundation licence
+(licenses\python-LICENSE.txt). It includes Tcl/Tk (a BSD-style licence: https://www.tcl.tk/software/tcltk/license.html).
+PyInstaller is under the GNU General Public License version 2 with an exception that lets programs it packages use any licence:
+https://github.com/pyinstaller/pyinstaller/blob/develop/COPYING.txt
+
+
+Not affiliated with Sony. "PSP" and "PlayStation" are trademarks of Sony Interactive Entertainment. PMF Studio contains no game content.

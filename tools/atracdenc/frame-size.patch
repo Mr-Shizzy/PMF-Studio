@@ -1,0 +1,43 @@
+diff --git a/src/atrac/at3p/at3p.cpp b/src/atrac/at3p/at3p.cpp
+index 97fbe04..cd20bab 100644
+--- a/src/atrac/at3p/at3p.cpp
++++ b/src/atrac/at3p/at3p.cpp
+@@ -27,6 +27,7 @@
+ #include <atrac/atrac_scale.h>
+ 
+ #include <cassert>
++#include <cstdlib>
+ #include <vector>
+ #include <unordered_map>
+ 
+@@ -37,7 +38,7 @@ namespace NAtracDEnc {
+ class TAt3PEnc::TImpl {
+ public:
+     TImpl(ICompressedOutput* out, int channels, TSettings settings)
+-        : BitStream(out, 2048)
++        : BitStream(out, getenv("AT3P_FRAME") ? atoi(getenv("AT3P_FRAME")) : 2048)
+         , ChannelCtx(channels)
+         , GhaProcessor(MakeGhaProcessor0(channels == 2, settings.UseGha & TSettings::GHA_WIDEBAND, settings.WidebandRefineMode))
+         , Settings(settings)
+diff --git a/src/main.cpp b/src/main.cpp
+index 854105d..099386f 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -449,7 +449,7 @@ static void PrepareAtrac3PEncoder(const string& inFile,
+ 
+     const string contName = ContainerName(container);
+     if (container == EContainer::RIFF) {
+-        omaIO = CreateAt3POutput(outFile, numChannels, numFrames, 2048);
++        omaIO = CreateAt3POutput(outFile, numChannels, numFrames, getenv("AT3P_FRAME") ? atoi(getenv("AT3P_FRAME")) : 2048);
+     } else if (container == EContainer::RAW) {
+         omaIO = CreateRawOutput(outFile, numChannels);
+     } else {
+@@ -457,7 +457,7 @@ static void PrepareAtrac3PEncoder(const string& inFile,
+             "test",
+             numChannels,
+             (int32_t)numFrames, OMAC_ID_ATRAC3PLUS,
+-            2048,
++            getenv("AT3P_FRAME") ? atoi(getenv("AT3P_FRAME")) : 2048,
+             false));
+     }
+ 

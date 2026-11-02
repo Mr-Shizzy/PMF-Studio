@@ -1,0 +1,33 @@
+diff --git a/src/atrac/at3p/at3p_bitstream.cpp b/src/atrac/at3p/at3p_bitstream.cpp
+index 0b5e239..c6f8045 100644
+--- a/src/atrac/at3p/at3p_bitstream.cpp
++++ b/src/atrac/at3p/at3p_bitstream.cpp
+@@ -651,8 +651,14 @@ IBitStreamPartEncoder::EStatus TTonalComponentEncoder::Encode(void* frameData, T
+     // Check tonal component already encoded
+     if (BitsUsed != 0) {
+         if (tonalBlock && tonalBlock->NumToneBands > specFrame->NumQuantUnits) {
+-            std::cerr << "TODO" << std::endl;
+-            abort();
++            // Small frame (low bitrate): there is no room left for all tone bands. Drop the highest ones and
++            // write the tonal part again, instead of aborting.
++            Trimmed = *tonalBlock;
++            Trimmed.NumToneBands = static_cast<uint8_t>(specFrame->NumQuantUnits);
++            specFrame->TonalBlock = &Trimmed;
++            Buf.clear();
++            BitsUsed = 0;
++            return Encode(frameData, ba);
+         }
+         return CheckFrameDone(specFrame, ba);
+     }
+diff --git a/src/atrac/at3p/at3p_bitstream_impl.h b/src/atrac/at3p/at3p_bitstream_impl.h
+index a73cc1a..e218cce 100644
+--- a/src/atrac/at3p/at3p_bitstream_impl.h
++++ b/src/atrac/at3p/at3p_bitstream_impl.h
+@@ -149,6 +149,7 @@ private:
+     void WriteTonalBlock(size_t channels, const TAt3PGhaData* tonalBlock);
+     void WriteSubbandFlags(const bool* flags, size_t numFlags);
+     size_t BitsUsed = 0;
++    TAt3PGhaData Trimmed;
+ };
+ 
+ 
