@@ -33,10 +33,14 @@ def run():
             r = subprocess.run([tools["ffmpeg"], "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30:d=4", "-f", "lavfi", "-i", "sine=f=440:d=4",
                                 "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", src], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, creationflags=NOWND)
             say("made a test clip", r.returncode == 0 and os.path.exists(src))
+            noise = os.path.join(work, "noise.wav")          # busy sound at the lowest quality: a sound encoder build without its fix stops here
+            subprocess.run([tools["ffmpeg"], "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "anoisesrc=d=4:c=pink:r=44100:a=0.3", "-ac", "2", noise],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NOWND)
             steps = [
                 ("gameboot movie", lambda: jobs.gameboot(dict(movie=src, out=work + "/gb.pmf", ctf=False), tools, lambda l: None), work + "/gb.pmf"),
                 ("C-Intro movie", lambda: jobs.cintro(dict(movie=src, out=work + "/ci.pmf"), tools, lambda l: None), work + "/ci.pmf"),
                 ("AT3 sound", lambda: jobs.at3(dict(sound=src, out=work + "/s.at3", kbps=64, lufs=-12, keep=False, loop=True), tools, lambda l: None), work + "/s.at3"),
+                ("AT3 sound, 32 kbps, busy sound", lambda: jobs.at3(dict(sound=noise, out=work + "/n32.at3", kbps=32, lufs=-12, keep=False, loop=True), tools, lambda l: None), work + "/n32.at3"),
                 ("PMF to MP4", lambda: jobs.extract(dict(src=work + "/gb.pmf", out=work + "/gb.mp4", sound_too=True), tools, lambda l: None), work + "/gb.mp4"),
                 ("smaller game movie", lambda: jobs.shrink(dict(src=work + "/gb.pmf", out=work + "/shrunk", amount="much"), tools, lambda l: None), work + "/shrunk/gb.pmf"),
                 ("AT3 to WAV", lambda: jobs.extract_sound(dict(sound=work + "/s.at3", out=work + "/s.wav", fmt="wav"), tools, lambda l: None), work + "/s.wav"),

@@ -723,7 +723,7 @@ class App(tk.Tk):
             tk.Label(f, text="Sound quality", width=14, anchor="w", bg=T.bg, fg=T.ink, font=(FONT, 10)).pack(side="left")
             if "sound_kbps" not in self.vars:
                 self.vars["sound_kbps"] = tk.StringVar(value="96 kbps")
-            Segmented(f, [(k, k) for k in ("128 kbps", "96 kbps", "64 kbps")], self.vars["sound_kbps"], self.shrink_refresh).pack(side="left")
+            Segmented(f, [(k, k) for k in KBPS[::-1]], self.vars["sound_kbps"], self.shrink_refresh).pack(side="left")
             tk.Label(self.sound_holder, text="Lower is smaller. A sound that is already lower than this is left alone.", bg=T.bg, fg=T.muted, font=(FONT, 9), anchor="w").pack(fill="x")
         path = self.vars["src"].get().strip()
         if not path:

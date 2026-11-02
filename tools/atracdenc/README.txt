@@ -27,6 +27,9 @@ Build (the exact recipe used for the binary that ships; Windows, clang + cmake +
         -DCMAKE_CXX_FLAGS="-ffile-prefix-map=<source dir>=src -fmacro-prefix-map=<source dir>=src -fdebug-prefix-map=<source dir>=src" ^
         -DCMAKE_C_FLAGS="-ffile-prefix-map=<source dir>=src" -DCMAKE_EXE_LINKER_FLAGS="-static -s"
   cmake --build build
+After building, check that the build has ALL the patches: `git status` in the source folder must list at3p.cpp, at3p_bitstream.cpp and
+at3p_bitstream_impl.h as modified, and `python -m unittest tests.test_atrac_low_kbps` must pass (a build without tonal-trim.patch stops
+with "TODO" at 32 and 48 kbps on busy sound; the build shipped on 2026-11-01 lacked it until this was caught on 2026-11-02).
 The prefix-map flags keep the build folder (and so the builder's user name) out of the program; -static -s links the C++ runtime in
 (no libunwind.dll to carry along) and strips symbols. The result needs only the Windows 10 system libraries.
 Verified: this build writes byte-identical OMA files to the earlier one.
