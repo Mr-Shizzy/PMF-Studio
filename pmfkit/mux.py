@@ -372,9 +372,10 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
 
 def _entry_flags(pos_of, mine, ends):
     """The first two bytes of an entry-point entry (PPSSPP: EPIndex and EPPicOffset). The first is 0xC0 in almost every entry of the retail movies
-    (15 of 4,722 in LocoRoco 2's B-frame movies differ: 0x80, 0x40 or 0x00, meaning not known). The second is twice the 4th number of the GOP's own
-    index (the pack, counted from the GOP's first pack, where its first four pictures end): it held for all 4,722 entries of Gun Showdown,
-    LocoRoco 2 and 007 From Russia With Love that have the first byte 0xC0."""
+    (44 of 1,650 in LocoRoco 2's B-frame movies are 0x80, 0x40 or 0x00, and those 44 do not follow the rule below either: meaning not known, they
+    are written as 0xC0 like the rest). The second is twice the 4th number of the GOP's own index (the pack, counted from the GOP's first pack,
+    where its first four pictures end): it held for all 4,722 entries of Gun Showdown, LocoRoco 2 and 007 From Russia With Love that have the
+    first byte 0xC0."""
     p = pos_of[id(mine[0])]
     rel = [pos_of[id(next(m for m in mine if m.cum_end >= end))] - p for end in ends[:4]]
     rel += [rel[-1]] * (4 - len(rel))
