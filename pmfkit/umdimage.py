@@ -19,6 +19,19 @@ def is_image(path):
     return os.path.isfile(path) and os.path.splitext(path)[1].lower() in (".cso", ".iso")
 
 
+PSP_UNSAFE_NAME = "()%"        # a game file with one of these in its name did not start on a real PSP (error 8002014C); the same file under a plain name did
+
+
+def psp_safe_name(name):
+    """a file name for a game image that the PSP starts: ( ) and % are replaced ("Game (smaller).cso" -> "Game - smaller.cso"); other names are returned as they are"""
+    if not any(c in name for c in PSP_UNSAFE_NAME):
+        return name
+    out = name.replace(" (", " - ").replace("(", "- ").replace(")", "").replace("%", " percent")
+    while "  " in out:
+        out = out.replace("  ", " ")
+    return out.replace(" .", ".")
+
+
 class Image:
     """sector access to an ISO or a CSO"""
 

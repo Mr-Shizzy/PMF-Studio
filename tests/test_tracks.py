@@ -281,5 +281,16 @@ class KeepTracksTests(unittest.TestCase):
             img.close()
 
 
+class GameFileNameTests(unittest.TestCase):
+    def test_a_name_with_brackets_or_a_percent_sign_is_cleaned_for_the_psp(self):
+        safe = umdimage.psp_safe_name
+        self.assertEqual(safe("007 From Russia with Love (smaller).cso"), "007 From Russia with Love - smaller.cso")
+        self.assertEqual(safe("007 Picker test (English only, picture 50%, sound 96).cso"), "007 Picker test - English only, picture 50 percent, sound 96.cso")
+        for good in ("Gun Test 21.cso", "007 TEST 1 - no B-frames, sound 96.cso", "Game - smaller.cso"):
+            self.assertEqual(safe(good), good)                                      # a comma and a dash are fine: such files ran
+        for name in ("A (b) (c).iso", "100%.cso", "(x).cso"):
+            self.assertFalse(any(c in safe(name) for c in "()%"), safe(name))
+
+
 if __name__ == "__main__":
     unittest.main()
