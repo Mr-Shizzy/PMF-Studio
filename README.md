@@ -38,11 +38,16 @@ Get the zip from the Releases page, unzip anywhere, run `PMF Studio.exe`. Window
 ## Status
 
 Beta. Everything was checked on one PSP (firmware 6.61 with ARK-5 and CXMB). Not tested yet on a PSP: movies for the C-Intro
-plugin. Smaller game movies have run inside real games (a shrunk game with 50% picture ran fine in two of them), but at the lowest
-picture and sound settings one game did not: whether a given game accepts the smaller movies is up to the game, so try the new
-game before you delete anything, and start with a milder choice. When it shrinks a whole game it also empties Sony's UPDATE folder
-(the firmware-update offer, useless on custom firmware) and never touches the game's XMB icon. The size limits come from tests on
-that PSP and may differ on other setups.
+plugin.
+
+Smaller game movies have run inside real games: 007 From Russia With Love and Family Guy at 50% picture, and Gun Showdown,
+shrunk with the whole game at the lowest picture (20%) and sound (32 kbps) settings, played through its start-up logos and the
+first Story movies. Shrinking keeps each movie built the way the game's own movie was (B-frames or not, reference frames, where
+the pictures start, buffer sizes, jump-point list) and changes only the bitrate. An earlier build that forced B-frames and
+2 reference frames at the lowest picture setting crashed Gun Showdown, so that is not offered in the window. Whether a given
+game accepts smaller movies is still up to the game: try the new game before you delete anything, and start with a milder
+choice if it fails. When it shrinks a whole game it also empties Sony's UPDATE folder (the firmware-update offer, useless on
+custom firmware) and never touches the game's XMB icon. The size limits come from tests on that PSP and may differ on other setups.
 
 ## Running from the source
 
