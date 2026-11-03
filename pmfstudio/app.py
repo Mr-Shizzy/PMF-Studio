@@ -805,7 +805,7 @@ class App(tk.Tk):
         """the 'save to' row follows what was picked: a folder for movies, a new game file for a game"""
         game = self.shrink_is_game()
         if game:
-            name = os.path.splitext(os.path.basename(self.vars["src"].get().strip()))[0] + " - smaller.cso"
+            name = os.path.splitext(os.path.basename(self.vars["src"].get().strip()))[0] + " - downsampled.cso"
             auto = self.out_default(name)
             self.shrink_out_label.configure(text="Save game as")
             self.shrink_note.configure(text="Your game file is never changed: the smaller game is saved as a new file (.cso is the smaller kind, .iso works too). "
@@ -1006,7 +1006,7 @@ class App(tk.Tk):
             out = self.vars["out"].get().strip()
             safe = os.path.join(os.path.dirname(out), umdimage.psp_safe_name(os.path.basename(out))) if out else out
             if out and safe != out and messagebox.askyesno(
-                    "PMF Studio", "A game file with ( ) or % in its name may not start on a PSP (it happened on a real one).\n\nSave it as\n%s\ninstead?" % os.path.basename(safe)):
+                    "PMF Studio", "A game file with a % in its name may not start on a PSP (it happened on a real one).\n\nSave it as\n%s\ninstead?" % os.path.basename(safe)):
                 self.vars["out"].set(safe)
         self.start(jobs.shrink, [("src", "a movie, a folder of movies or a game"), ("out", "where to save")])
 
