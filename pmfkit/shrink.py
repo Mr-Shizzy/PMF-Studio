@@ -117,9 +117,11 @@ def _reencode(ffmpeg, es_in, es_out, seconds, kbps, gop, bframes, bufsize, refs=
     refs = refs or (2 if bframes else 1)
     forced = []
     if idr_frames and 1 < len(idr_frames) <= MAX_FORCED_IDRS:
-        # a list of times, each half a picture before its picture (ffmpeg takes the first picture at or after the time); an expression with
-        # one term per GOP ("eq(n,59)+...") is refused by ffmpeg from about 200 terms on
-        times = ",".join("%.6f" % max(0.0, (n - 0.5) * 1001 / 30000) for n in idr_frames)
+        # a list of times, each a quarter of a picture before its picture. ffmpeg turns a time into picture units and ROUNDS it, then takes the
+        # first picture at or after that: n - 0.5 is a rounding tie (a microsecond of error in the text decided between n and n - 1: about a
+        # third of the keyframes came out one picture early), n - 0.25 always rounds to n. An expression with one term per GOP
+        # ("eq(n,59)+...") is refused by ffmpeg from about 200 terms on
+        times = ",".join("%.6f" % max(0.0, (n - 0.25) * 1001 / 30000) for n in idr_frames)
         forced = ["-force_key_frames", times, "-forced-idr", "1"]
         gaps = [b - a for a, b in zip(idr_frames, idr_frames[1:])] + [pictures - idr_frames[-1]]       # the last GOP counts too
         gop, keymin = max(gaps + [gop]) + 8, 1              # nothing else starts a GOP: the forced pictures do (the encoder's own limit is kept out of the way: with B-frames it fires a picture early)
