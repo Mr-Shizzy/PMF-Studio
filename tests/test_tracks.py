@@ -281,6 +281,34 @@ class KeepTracksTests(unittest.TestCase):
             img.close()
 
 
+@unittest.skipUnless(FFMPEG and ATRAC, "needs ffmpeg and atracdenc")
+class EntryFlagTests(unittest.TestCase):
+    """the entry-point map's first two bytes: 0xC0, then twice the 4th number of the GOP's own index (found in the retail movies of three games)"""
+
+    @classmethod
+    def setUpClass(cls):
+        TrackTests.setUpClass()
+
+    @classmethod
+    def tearDownClass(cls):
+        TrackTests.tearDownClass()
+
+    def test_every_entry_agrees_with_the_index_in_the_pack_it_points_to(self):
+        from pmfkit import psmf
+        from pmfkit.demux import header_size
+        t = TrackTests
+        raw = mux(t.video, t.streams[0], version="0014", style="B", header_kib=129, video_kib=129, strict=False, entry_hint=lambda pts, n: 0)
+        hs = header_size(raw)
+        entries = psmf.parse_header(raw[:hs]).entries
+        self.assertGreater(len(entries), 1)
+        for hint, pts, pack_no in entries:
+            pack = raw[hs + pack_no * SECTOR: hs + (pack_no + 1) * SECTOR]
+            i = pack.find(b"\x00\x00\x01\xbf")
+            body = pack[i + 6:i + 6 + int.from_bytes(pack[i + 4:i + 6], "big")]
+            fourth = int.from_bytes(body[8:10], "big")
+            self.assertEqual(hint, 0xC000 | 2 * fourth)
+
+
 class GameFileNameTests(unittest.TestCase):
     def test_a_percent_sign_in_a_name_is_written_as_a_word_for_the_psp(self):
         safe = umdimage.psp_safe_name

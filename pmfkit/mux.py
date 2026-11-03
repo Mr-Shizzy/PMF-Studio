@@ -361,8 +361,8 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
         stream += pk
     entries = ()
     if entry_hint is not None:                                       # one entry per GOP: the IDR's time stamp and the pack it starts in
-        entries = tuple((entry_hint(FIRST_PTS + FRAME * (disp[a0] if disp else a0), sum(len(a.data) for a in aus[a0:a0 + 3])),
-                         FIRST_PTS + FRAME * (disp[a0] if disp else a0), pos_of[id(mine[0])]) for a0, a1, mine, ends in gops)
+        entries = tuple((_entry_flags(pos_of, mine, ends), FIRST_PTS + FRAME * (disp[a0] if disp else a0), pos_of[id(mine[0])])
+                        for a0, a1, mine, ends in gops)
     hdr = psmf.build_header(psmf.Params(
         stream_bytes=len(stream), last_pts=FIRST_PTS + FRAME * len(aus), width=width, height=height,
         version=version, first_pts=FIRST_PTS, video_buffer_kib=header_kib, audio=audio is not None, audio_tracks=max(1, n_tracks),
@@ -370,10 +370,20 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
     return hdr + bytes(stream)
 
 
+def _entry_flags(pos_of, mine, ends):
+    """The first two bytes of an entry-point entry (PPSSPP: EPIndex and EPPicOffset). The first is 0xC0 in almost every entry of the retail movies
+    (15 of 4,722 in LocoRoco 2's B-frame movies differ: 0x80, 0x40 or 0x00, meaning not known). The second is twice the 4th number of the GOP's own
+    index (the pack, counted from the GOP's first pack, where its first four pictures end): it held for all 4,722 entries of Gun Showdown,
+    LocoRoco 2 and 007 From Russia With Love that have the first byte 0xC0."""
+    p = pos_of[id(mine[0])]
+    rel = [pos_of[id(next(m for m in mine if m.cum_end >= end))] - p for end in ends[:4]]
+    rel += [rel[-1]] * (4 - len(rel))
+    return 0xC000 | min(0xFF, 2 * rel[3])
+
+
 def hint_from_size(first_bytes, top=0xC000):
-    """A guess for the u16 of an entry-point map entry. In the game movies looked at it is 0xC000 plus an even number that follows the amount of
-    data in the first pictures of the GOP (about a kilobyte per kilobyte, plus a little); the exact rule is not known, and the map is
-    a seek table that games run without."""
+    """OLD GUESS, no longer used by mux (see _entry_flags for the exact rule): the u16 of an entry-point map entry as 0xC000 plus an even number
+    that follows the amount of data in the first pictures of the GOP."""
     if first_bytes < 1000:
         return top
     n = int(first_bytes / 1000 * 1.1 + 1)
