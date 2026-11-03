@@ -605,7 +605,7 @@ def main(argv=None):
     sh.add_argument("--atracdenc", help="path to atracdenc (only needed with --sound-kbps)")
     sh.add_argument("--amount", default="much", help="the share of the picture bitrate to keep: a number such as 0.5 (1.0 leaves the picture as it is and only changes the sound with --sound-kbps), or the words smaller (0.75), much (0.5), tiny (0.3)")
     sh.add_argument("--sound-kbps", type=int, help="encode the sound again at this ATRAC3plus bitrate (default: keep the sound as it is)")
-    sh.add_argument("--bframes", type=int, default=1, help="B-frames in the new picture (default 1, as in the game movies we looked at)")
+    sh.add_argument("--bframes", type=int, default=None, help="B-frames in the new picture. Default: copy what the original movie does (mirror mode: B-frames, reference frames, GOP starts, buffer numbers and entry-point map stay as they are, only the bitrate changes); a number forces that many")
     sh.set_defaults(fn=cmd_shrink)
     i = sub.add_parser("info", help="show header info of a pmf")
     i.add_argument("pmf")

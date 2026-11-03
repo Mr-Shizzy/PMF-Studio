@@ -89,12 +89,68 @@ class ShrinkMovieTests(unittest.TestCase):
         _, v1, t1, p1 = demux_all(big)
         self.assertEqual((v1, t1, len(p1)), (v0, t0, len(p0)))
 
-    def test_a_movie_with_a_big_header_is_left_alone_for_now(self):
+    def test_a_movie_with_a_big_header_can_be_shrunk(self):
         path, _ = self.big_header_copy()
         out = os.path.join(self.dir, "big_out.pmf")
         r = shrink.shrink(path, out, FFMPEG, ATRAC, ratio=0.5)[0]
-        self.assertTrue(r.note.startswith("failed"), r.note)
-        self.assertFalse(os.path.exists(out))
+        self.assertLess(r.after, r.before)
+        _, v0, a0, _ = demux(open(path, "rb").read())
+        _, v1, a1, _ = demux(open(out, "rb").read())
+        self.assertEqual(a1, a0)
+
+    def structure(self, pmf_bytes):
+        """what the game's player could care about: SPS facts, the pictures that start a GOP, buffer numbers, the map"""
+        from pmfkit import mirror
+        from pmfkit.sps import stream_info
+        src = mirror.read(pmf_bytes)
+        sps, _ = stream_info(demux(pmf_bytes)[1])
+        return src, sps
+
+    def test_mirror_mode_keeps_the_structure_of_the_original(self):
+        """a movie with GOPs of 30 pictures, no B-frames, 1 reference frame comes out the same way (earlier versions made B-frames, 2 refs, GOP 59)"""
+        from pmfkit.demux import demux_all
+        with tempfile.TemporaryDirectory() as d:
+            mp4 = os.path.join(self.dir, "src.mp4")
+            src = os.path.join(d, "gop30.pmf")
+            cli.main(["make", mp4, "-o", src, "--ffmpeg", FFMPEG, "--atracdenc", ATRAC, "--video-kbps", "2500", "--audio-kbps", "128", "--quiet-audio", "--gop", "30"])
+            out = os.path.join(d, "small.pmf")
+            r = shrink.shrink(src, out, FFMPEG, ATRAC, ratio=0.5)[0]
+            self.assertLess(r.after, r.before)
+            a, sa = self.structure(open(src, "rb").read())
+            b, sb = self.structure(open(out, "rb").read())
+            self.assertEqual(a.idr_frames, [0, 30, 60, 90])
+            self.assertEqual(b.idr_frames, a.idr_frames)                          # the same pictures start a GOP
+            self.assertEqual((sb["poc_type"], sb["num_ref_frames"]), (sa["poc_type"], sa["num_ref_frames"]))      # no B-frames, one reference frame
+            self.assertEqual((b.style, b.version, b.video_kib, b.header_kib), (a.style, a.version, a.video_kib, a.header_kib))
+            self.assertEqual(b.has_map, a.has_map)
+
+    def test_mirror_mode_copies_buffer_numbers_and_the_entry_point_map(self):
+        from pmfkit import atrac3p, mirror
+        from pmfkit.demux import demux_all
+        from pmfkit.mux import mux, hint_from_size
+        with tempfile.TemporaryDirectory() as d:
+            _, v, a, _ = demux(open(self.pmf, "rb").read())
+            # the original: a game-style movie with a 129 KiB buffer and an entry-point map
+            game = mux(v, atrac3p.from_units(a), version="0014", style="B", header_kib=129, video_kib=129, entry_hint=lambda pts, n: hint_from_size(n))
+            src = os.path.join(d, "game.pmf")
+            open(src, "wb").write(game)
+            before = mirror.read(game)
+            self.assertTrue(before.has_map and before.video_kib == 129 and before.header_kib == 129)
+            out = os.path.join(d, "small.pmf")
+            r = shrink.shrink(src, out, FFMPEG, ATRAC, ratio=0.5)[0]
+            self.assertLess(r.after, r.before)
+            raw = open(out, "rb").read()
+            after = mirror.read(raw)
+            self.assertEqual((after.video_kib, after.header_kib, after.version, after.style), (129, 129, "0014", "B"))
+            params, _, _, packs = demux_all(raw)
+            self.assertEqual(len(params.entries), len(after.idr_frames))
+            self.assertEqual([pts for _, pts, _ in params.entries], [pts for _, pts, _ in demux_all(game)[0].entries])        # the same IDRs are listed
+            for hint, pts, pack in params.entries:                                 # each entry points at a pack that starts the GOP whose first picture has that time stamp
+                items = packs[pack].items
+                self.assertIn(0xBB, [it.sid for it in items])
+                first = next(it for it in items if it.sid == 0xE0)
+                self.assertEqual(first.pts, pts)
+                self.assertEqual(hint >> 12, 0xC)
 
     def test_survey_and_prediction(self):
         info = shrink.survey(self.pmf)

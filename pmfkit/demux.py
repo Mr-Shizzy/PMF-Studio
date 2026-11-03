@@ -77,8 +77,9 @@ def header_size(pmf):
 def demux_all(pmf):
     """-> (Params, video_es, {track number: audio bytes}, list[Pack]). The first byte of an audio PES payload is its track (0, 1, 2...);
     the 4-byte PES prefix is not part of the audio bytes."""
-    params = psmf.parse_header(pmf[:2048])
-    plist = list(packs(pmf[header_size(pmf):]))
+    hs = header_size(pmf)
+    params = psmf.parse_header(pmf[:hs])
+    plist = list(packs(pmf[hs:]))
     v, tracks = bytearray(), {}
     for pk in plist:
         for it in pk.items:

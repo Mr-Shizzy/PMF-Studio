@@ -251,10 +251,14 @@ class _AudioFeeder:
 
 
 def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, header_kib=None, strict=True,
-        index_last_flag=0, video_lead=VIDEO_LEAD, audio_pts_base=AUDIO_PTS_BASE, audio2_floor=AUDIO2_FLOOR, allow_b=False):
+        index_last_flag=0, video_lead=VIDEO_LEAD, audio_pts_base=AUDIO_PTS_BASE, audio2_floor=AUDIO2_FLOOR, allow_b=False,
+        video_kib=None, entry_hint=None):
     """video_es: Annex B H.264 (AUD, SPS/PPS on every IDR). No B-frames unless allow_b=True (picture order count type 0,
     2 reference frames, as in LocoRoco 2; untested for our own output on hardware). audio: Atrac3pStream or None. -> PMF bytes.
-    version = PSMF header version ("0012" gameboot-safe); style = stream style "A"/"B" (see PROFILES)."""
+    version = PSMF header version ("0012" gameboot-safe); style = stream style "A"/"B" (see PROFILES).
+    video_kib: the video buffer written into the system headers and the PES extensions (default: the style's own number; a game's own
+    movies say 129, 251 or 495). entry_hint: a function (PTS of the IDR, bytes of its first three pictures) -> the u16 hint of an entry-point
+    map entry; when given, the header gets a map with one entry per GOP (what the game's own movies carry)."""
     if style not in PROFILES:
         raise ValueError("unknown stream style %r (use A or B)" % style)
     n_tracks = len(audio) if isinstance(audio, (list, tuple)) else (0 if audio is None else 1)
@@ -270,7 +274,7 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
         raise ValueError("this video will not play on a real PSP:\n  - " + "\n  - ".join(problems))
     if header_kib is None:
         header_kib = HEADER_KIB.get(version, PROFILES[style]["video_kib"])        # 0013/0015: the header carries the same number as the stream's own system header
-    video_kib = PROFILES[style]["video_kib"]
+    video_kib = video_kib or PROFILES[style]["video_kib"]
     aus = split_access_units(video_es)
     for a in aus:
         if len(a.data) > 0xFFFF:
@@ -332,10 +336,25 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
         pk = pack_header(scr) + body
         assert len(pk) == PACK, len(pk)
         stream += pk
+    entries = ()
+    if entry_hint is not None:                                       # one entry per GOP: the IDR's time stamp and the pack it starts in
+        entries = tuple((entry_hint(FIRST_PTS + FRAME * (disp[a0] if disp else a0), sum(len(a.data) for a in aus[a0:a0 + 3])),
+                         FIRST_PTS + FRAME * (disp[a0] if disp else a0), pos_of[id(mine[0])]) for a0, a1, mine, ends in gops)
     hdr = psmf.build_header(psmf.Params(
         stream_bytes=len(stream), last_pts=FIRST_PTS + FRAME * len(aus), width=width, height=height,
-        version=version, first_pts=FIRST_PTS, video_buffer_kib=header_kib, audio=audio is not None, audio_tracks=max(1, n_tracks)))
+        version=version, first_pts=FIRST_PTS, video_buffer_kib=header_kib, audio=audio is not None, audio_tracks=max(1, n_tracks),
+        entries=entries))
     return hdr + bytes(stream)
+
+
+def hint_from_size(first_bytes, top=0xC000):
+    """A guess for the u16 of an entry-point map entry. In the game movies looked at it is 0xC000 plus an even number that follows the amount of
+    data in the first pictures of the GOP (about a kilobyte per kilobyte, plus a little); the exact rule is not known, and the map is
+    a seek table that games run without."""
+    if first_bytes < 1000:
+        return top
+    n = int(first_bytes / 1000 * 1.1 + 1)
+    return top | min(0x3FE, n + (n & 1))
 
 
 def _gops_from(units):

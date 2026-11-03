@@ -11,8 +11,8 @@ import re
 import shutil
 import tempfile
 
-from . import atrac3p, snd0
-from .demux import demux, demux_all, duration_seconds, header_size
+from . import atrac3p, mirror, snd0
+from .demux import demux, demux_all, duration_seconds
 from .extract import load_pmf
 from .h264 import split_access_units
 from .mux import mux, HEADER_KIB
@@ -103,13 +103,27 @@ def predict(info, ratio, sound_kbps=None):
     return int(info.total * ((1 - info.sound_share) * min(ratio, 1.0) + sound))
 
 
-def _reencode(ffmpeg, es_in, es_out, seconds, kbps, gop, bframes, bufsize):
+MAX_FORCED_IDRS = 1500        # the pictures to start a GOP with are given to ffmpeg on its command line; a longer list keeps the regular spacing instead
+
+
+def _reencode(ffmpeg, es_in, es_out, seconds, kbps, gop, bframes, bufsize, refs=None, idr_frames=None, pictures=0):
+    """idr_frames: the numbers of the pictures that must start a GOP (an IDR picture each); None = one every `gop` pictures"""
     from . import cli
-    refs = 2 if bframes else 1
+    refs = refs or (2 if bframes else 1)
+    forced = []
+    if idr_frames and 1 < len(idr_frames) <= MAX_FORCED_IDRS:
+        # a list of times, each half a picture before its picture (ffmpeg takes the first picture at or after the time); an expression with
+        # one term per GOP ("eq(n,59)+...") is refused by ffmpeg from about 200 terms on
+        times = ",".join("%.6f" % max(0.0, (n - 0.5) * 1001 / 30000) for n in idr_frames)
+        forced = ["-force_key_frames", times, "-forced-idr", "1"]
+        gaps = [b - a for a, b in zip(idr_frames, idr_frames[1:])] + [pictures - idr_frames[-1]]       # the last GOP counts too
+        gop, keymin = max(gaps + [gop]), 1                  # nothing else starts a GOP: the forced pictures do
+    else:
+        keymin = gop
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "h264", "-r", "30000/1001", "-i", es_in] + passthrough_args(ffmpeg) + [
         "-an", "-c:v", "libx264", "-profile:v", "main", "-level", "2.1", "-bf", str(bframes), "-refs", str(refs),
-        "-g", str(gop), "-keyint_min", str(gop), "-b:v", "%dk" % kbps, "-maxrate", "%dk" % int(kbps * 1.5), "-bufsize", "%dk" % bufsize,
-        "-pix_fmt", "yuv420p", "-x264-params", cli.X264_PARAMS + ":weightp=0" + (":b-pyramid=none:b-adapt=0:weightb=0" if bframes else ""),
+        "-g", str(gop), "-keyint_min", str(keymin), "-b:v", "%dk" % kbps, "-maxrate", "%dk" % int(kbps * 1.5), "-bufsize", "%dk" % bufsize,
+        "-pix_fmt", "yuv420p"] + forced + ["-x264-params", cli.X264_PARAMS + ":weightp=0" + (":b-pyramid=none:b-adapt=0:weightb=0" if bframes else ""),
         "-f", "h264", es_out]
     cli.run(cmd, track=("ffmpeg", seconds))
 
@@ -142,13 +156,13 @@ def _new_sound(ffmpeg, atracdenc, audio_es, work, kbps):
     return atrac3p.read_oma(oma)
 
 
-def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframes=1, log=print):
+def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframes=None, log=print):
     """src (.pmf) -> dst (.pmf). ratio: the share of the picture's bitrate to keep. sound_kbps: None keeps the sound as it is.
+    bframes: None = MIRROR the original (only the bitrate changes: the same B-frame use, reference frames, GOP starts, buffer numbers and
+    entry-point map as the movie has now); a number forces that many B-frames and the plain layout of earlier versions.
     Raises ValueError with a plain message when the file can't be used. -> ShrinkResult"""
     from .cli import PROGRESS
     raw = load_pmf(src)
-    if header_size(raw) != 2048:
-        raise ValueError("This movie has a bigger header than PMF Studio can write yet, so it was left as it is.")
     params, video, tracks, _ = demux_all(raw)
     if not video:
         raise ValueError("There is no picture in that movie.")
@@ -177,6 +191,16 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
         return ShrinkResult(src, dst, before, before, "nothing to change: copied as it is")
     version = params.version if params.version in ("0012", "0013", "0014", "0015") else "0012"        # the game's own version label is kept (the layout is the same in all of them)
     style = "A" if params.video_buffer_kib >= 400 else "B"
+    mir = mirror.read(raw) if bframes is None else None
+    if mir is not None and not mir.known:
+        mir = None
+    container = dict(version=version, style=style, width=params.width, height=params.height)
+    refs = idr_frames = None
+    if mir is not None:
+        bframes, refs, idr_frames = mir.bframes, (max(2, mir.refs) if mir.bframes else mir.refs), mir.idr_frames
+        container.update(style=mir.style, video_kib=mir.video_kib or None, header_kib=mir.header_kib or None)
+    elif bframes is None:
+        bframes = 1
     work = tempfile.mkdtemp(prefix="pmfshrink_")
     try:
         es_in, es_out = os.path.join(work, "in.264"), os.path.join(work, "out.264")
@@ -201,15 +225,15 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
                 return ShrinkResult(src, dst, before, before, "the sound is already that low: copied as it is")
             # the picture goes back in exactly as it was (the game's own stream: no PSP check needed), only the sound is new
             with PROGRESS.stage(0.2, 0.95, "Putting the movie together…"):
-                best = mux(video, sound, version=version, style=style, width=params.width, height=params.height, allow_b=True, strict=False)
+                best = mux(video, sound, allow_b=True, strict=False, entry_hint=mirror.entry_hint_for(mir, True) if mir is not None and mir.has_map else None, **container)
             kbps = old_kbps
         for attempt in range(0 if keep_picture else 4):
             lo = 0.2 + 0.7 * attempt / 4
             with PROGRESS.stage(lo, lo + 0.7 / 4, "Making the picture smaller…" if attempt == 0 else "Adjusting…"):
-                _reencode(ffmpeg, es_in, es_out, seconds, kbps, gop, bframes, bufsize)
+                _reencode(ffmpeg, es_in, es_out, seconds, kbps, gop, bframes, bufsize, refs, idr_frames, len(aus))
             try:
-                out = mux(open(es_out, "rb").read(), sound, version=version, style=style, width=params.width, height=params.height,
-                          allow_b=bool(bframes), strict=True)
+                out = mux(open(es_out, "rb").read(), sound, allow_b=bool(bframes), strict=True,
+                          entry_hint=mirror.entry_hint_for(mir) if mir is not None and mir.has_map else None, **container)
             except ValueError as e:
                 if "picture is larger" not in str(e):
                     raise
@@ -282,7 +306,7 @@ def _digest(path):
     return (os.path.getsize(path), h.hexdigest())
 
 
-def shrink(path, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframes=1, log=print):
+def shrink(path, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframes=None, log=print):
     """a movie or a folder of movies -> out (a file for a movie, a folder for a folder; same file names inside).
     -> list of ShrinkResult. A movie that fails is reported and skipped; the others go on."""
     from .cli import PROGRESS, BuildError, Cancelled

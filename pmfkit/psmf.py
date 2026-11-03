@@ -26,6 +26,7 @@ class Params:
     audio: bool = False
     streams: int = 1                # stream entries in the header: 1 video + the sound tracks (007 From Russia With Love: 5 = 4 tracks)
     audio_tracks: int = 1           # sound tracks to write when audio is True (one entry each; fields below grow by 16 bytes per track)
+    entries: tuple = ()             # the optional entry-point map: (u16 hint, PTS of an IDR, pack that IDR starts in) per GOP
 
 
 def pstd(kib):
@@ -37,12 +38,16 @@ def build_header(p):
         raise ValueError("version must be 4 digits, e.g. '0012'")
     if p.width % 16 or p.height % 16:
         raise ValueError("width/height must be multiples of 16")
-    h = bytearray(2048)
+    t = max(1, p.audio_tracks) if p.audio else 0
+    map_at = 0x92 + 16 * t                              # the map starts right after the stream entries (0xA2 with one sound track)
+    size = 2048
+    if p.entries:
+        size = -(-(map_at + 10 * len(p.entries)) // 2048) * 2048          # a long map needs a bigger header (Gun Showdown's CREDITS.PMF: 4096)
+    h = bytearray(size)
     h[0:4] = b"PSMF"
     h[4:8] = p.version.encode()
-    h[8:12] = (2048).to_bytes(4, "big")
+    h[8:12] = size.to_bytes(4, "big")
     h[12:16] = p.stream_bytes.to_bytes(4, "big")
-    t = max(1, p.audio_tracks) if p.audio else 0
     a = 16 * t
     h[0x50:0x54] = (0x3E + a).to_bytes(4, "big")
     h[0x54:0x5A] = p.first_pts.to_bytes(6, "big")
@@ -65,6 +70,14 @@ def build_header(p):
         o = 0x92 + 16 * j
         h[o:o + 4] = bytes([0xBD, j, 0x20, 0x04])
         h[o + 14:o + 16] = b"\x02\x02"
+    if p.entries:                                       # video entry bytes 4-7: where the map is, 8-11: how many entries; 10 bytes each
+        h[0x86:0x8A] = map_at.to_bytes(4, "big")
+        h[0x8A:0x8E] = len(p.entries).to_bytes(4, "big")
+        for i, (hint, pts, pack) in enumerate(p.entries):
+            o = map_at + 10 * i
+            h[o:o + 2] = hint.to_bytes(2, "big")
+            h[o + 2:o + 6] = pts.to_bytes(4, "big")
+            h[o + 6:o + 10] = pack.to_bytes(4, "big")
     return bytes(h)
 
 
@@ -73,6 +86,11 @@ def parse_header(h):
     if h[:4] != b"PSMF":
         raise ValueError("not a PSMF file")
     streams = int.from_bytes(h[0x80:0x82], "big")
+    entries = ()
+    at, count = int.from_bytes(h[0x86:0x8A], "big"), int.from_bytes(h[0x8A:0x8E], "big")
+    if at and count and at + 10 * count <= len(h):
+        entries = tuple((int.from_bytes(h[at + 10 * i:at + 10 * i + 2], "big"), int.from_bytes(h[at + 10 * i + 2:at + 10 * i + 6], "big"),
+                         int.from_bytes(h[at + 10 * i + 6:at + 10 * i + 10], "big")) for i in range(count))
     return Params(
         stream_bytes=int.from_bytes(h[12:16], "big"),
         last_pts=int.from_bytes(h[0x5A:0x60], "big"),
@@ -83,4 +101,5 @@ def parse_header(h):
         audio=streams >= 2,
         streams=streams,
         audio_tracks=max(1, streams - 1),
+        entries=entries,
     )
