@@ -3,7 +3,7 @@
 Rules reproduced from Sony-composer PMFs (see RESEARCH_NOTES.md):
   * every GOP (IDR with SPS/PPS) starts a new pack: system header + 0xBF GOP index + video PES with PTS/DTS (+P-STD ext)
   * later video PES carry PTS/DTS only when an access unit starts in them >=16 frames after the last stamp
-  * the last pack of a stream is filled with a 0xBE padding packet (or PES header stuffing if <6 bytes are left)
+  * the last pack of a stream is filled with a 0xBE padding packet (or PES header stuffing if <8 bytes are left)
   * audio PES payload = 00 00 <ptr> + audio bytes; ptr = distance to the next 8-byte audio unit header (0xFFFF if none)
   * SCR advances 44236.8 (27 MHz) per pack; a video pack is not sent earlier than DTS(AU following it) - 89925,
     an audio pack waits until the 4096-byte audio buffer has room (units leave it at their PTS)
@@ -81,11 +81,12 @@ def system_header(style, video_kib):
 
 def pes(sid, flags2, fields, payload, room):
     """One PES packet plus padding so the result is exactly `room` bytes.
-    `fields` = PES header data (PTS/DTS/extension). Gaps of 1-5 bytes become header stuffing."""
+    `fields` = PES header data (PTS/DTS/extension). Gaps of 1-7 bytes become header stuffing, 8 or more a padding packet
+    (the rule in Sony's MpsMux.dll; retail movies hold no padding packet with a payload of 0 or 1 byte)."""
     rest = room - (6 + 3 + len(fields) + len(payload))
     assert rest >= 0, rest
     pad = b""
-    if 0 < rest < 6:
+    if 0 < rest < 8:
         fields, rest = fields + b"\xff" * rest, 0
     elif rest:
         pad = b"\x00\x00\x01\xbe" + (rest - 6).to_bytes(2, "big") + b"\xff" * (rest - 6)

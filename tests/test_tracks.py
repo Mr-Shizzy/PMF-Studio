@@ -318,5 +318,22 @@ class GameFileNameTests(unittest.TestCase):
             self.assertEqual(safe(good), good)                                      # a comma, a dash and brackets are fine
 
 
+class PackFillTests(unittest.TestCase):
+    def test_a_gap_of_up_to_7_bytes_is_header_stuffing_and_8_or_more_a_padding_packet(self):
+        from pmfkit.mux import pes
+        for gap in range(0, 40):
+            payload = b"\x11" * 100
+            room = 6 + 3 + 5 + len(payload) + gap
+            out = pes(0xE0, 0x80, b"\x21\x00\x01\x00\x01", payload, room)
+            self.assertEqual(len(out), room, gap)
+            has_padding = b"\x00\x00\x01\xbe" in out
+            self.assertEqual(has_padding, gap >= 8, gap)                            # Sony's MpsMux.dll: 1-7 bytes are stuffing
+            if has_padding:
+                self.assertEqual(int.from_bytes(out[-gap + 4:-gap + 6], "big"), gap - 6)    # the padding length field
+                self.assertEqual(out[-(gap - 6):], b"\xff" * (gap - 6))
+            elif gap:
+                self.assertEqual(out[9:9 + 5 + gap][-gap:], b"\xff" * gap)           # the stuffing sits at the end of the PES header
+
+
 if __name__ == "__main__":
     unittest.main()
