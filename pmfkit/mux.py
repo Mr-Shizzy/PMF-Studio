@@ -23,6 +23,7 @@ FIRST_PTS = 90000
 SCR_START = 3044236
 SCR_STEP = Fraction(2048 * 27000000, 25000 * 50)          # 44236.8 ticks of 27 MHz per pack
 VIDEO_LEAD = 89925          # fitted on Sony PMFs: SCR >= DTS(AU after the pack) - 89925
+MIN_VIDEO_LEAD = 35000      # a picture's first byte is never sent later than DTS - this (Sony movies: smallest lead seen 35,814)
 AUDIO_BUF = 4096            # audio P-STD buffer
 AUDIO2_FLOOR = 16046        # Sony files send the 2nd audio pack at SCR 16046 (90 kHz) regardless of content
 STAMP_EVERY = 16
@@ -176,6 +177,12 @@ def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead):
         else:
             kn = a1 if has_next else None
         e.floor = None if kn is None else dts(kn) - video_lead
+        if kn is not None:
+            # A pack that holds many tiny pictures (a still scene at a very low bitrate) must not wait for the LAST of them: the picture it
+            # starts in would reach the decoder late (up to 0.84 s in a 67 s Gun Showdown intro shrunk to the lowest picture quality, and the
+            # PSP froze there). Sony's own movies never deliver a picture later than MIN_VIDEO_LEAD before its decode time (smallest lead over
+            # 38 movies: 35,814 ticks); ordinary packs end in the picture they start in or the next one and are not touched by this.
+            e.floor = min(e.floor, dts(a0 + bisect.bisect_right(starts, pos) - 1) - MIN_VIDEO_LEAD)
         e.body = pes(0xE0, flags2, fields, data[pos:end], room)
         e.cum_end = end
         mine.append(e)
