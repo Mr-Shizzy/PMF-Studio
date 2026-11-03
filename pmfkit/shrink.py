@@ -122,7 +122,7 @@ def _reencode(ffmpeg, es_in, es_out, seconds, kbps, gop, bframes, bufsize, refs=
         times = ",".join("%.6f" % max(0.0, (n - 0.5) * 1001 / 30000) for n in idr_frames)
         forced = ["-force_key_frames", times, "-forced-idr", "1"]
         gaps = [b - a for a, b in zip(idr_frames, idr_frames[1:])] + [pictures - idr_frames[-1]]       # the last GOP counts too
-        gop, keymin = max(gaps + [gop]), 1                  # nothing else starts a GOP: the forced pictures do
+        gop, keymin = max(gaps + [gop]) + 8, 1              # nothing else starts a GOP: the forced pictures do (the encoder's own limit is kept out of the way: with B-frames it fires a picture early)
     else:
         keymin = gop
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "h264", "-r", "30000/1001", "-i", es_in] + passthrough_args(ffmpeg) + [
