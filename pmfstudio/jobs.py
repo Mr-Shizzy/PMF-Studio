@@ -164,10 +164,7 @@ def shrink(v, tools, emit):
     if umdimage.is_image(src):                      # a whole game: v["out"] is the new game file (.cso or .iso)
         if os.path.normcase(out) == os.path.normcase(src):
             raise cli.BuildError("Save the smaller game under another name. PMF Studio never replaces your original.")
-        argv = ["shrink", src, "-o", out, "--ffmpeg", tools["ffmpeg"], "--amount", str(v.get("picture", "0.5"))]
-        if v.get("sound", "keep") != "keep":
-            argv += ["--atracdenc", tools["atracdenc"], "--sound-kbps", str(int(v["sound"]))]
-        run(argv, emit)
+        run(_shrink_argv(v, tools, src, out), emit)
         return
     if os.path.isdir(src):
         if out == src or out.startswith(src.rstrip("\\/") + os.sep):
@@ -177,10 +174,21 @@ def shrink(v, tools, emit):
         dest = os.path.join(out, os.path.basename(src))
         if os.path.normcase(dest) == os.path.normcase(src):
             raise cli.BuildError("Save the smaller movie in a different folder. PMF Studio never replaces your originals.")
+    run(_shrink_argv(v, tools, src, dest), emit)
+
+
+def _shrink_argv(v, tools, src, dest):
+    """the shrink command for the window's choices: picture amount, sound quality, and the sound tracks to keep (v["keep"], counted from 1)"""
     argv = ["shrink", src, "-o", dest, "--ffmpeg", tools["ffmpeg"], "--amount", str(v.get("picture", "0.5"))]
-    if v.get("sound", "keep") != "keep":
-        argv += ["--atracdenc", tools["atracdenc"], "--sound-kbps", str(int(v["sound"]))]
-    run(argv, emit)
+    recode = v.get("sound", "keep") != "keep"
+    keep = str(v.get("keep", "") or "").strip()
+    if recode or keep:
+        argv += ["--atracdenc", tools["atracdenc"]]
+    if recode:
+        argv += ["--sound-kbps", str(int(v["sound"]))]
+    if keep:
+        argv += ["--keep-tracks", keep]
+    return argv
 
 
 def extract_sound(v, tools, emit):

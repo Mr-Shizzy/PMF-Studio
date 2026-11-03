@@ -7,7 +7,7 @@ What happens to a track you do not keep:
 Whether a game accepts a missing or a shortened track is up to the game: see RESEARCH_NOTES.md (sound tracks)."""
 import os
 
-from . import atrac3p, cli, mirror
+from . import atrac3p, cli, mirror, psmf, umdimage
 from .demux import demux_all
 from .mux import mux
 
@@ -73,3 +73,91 @@ def retrack(raw, keep, others, ffmpeg=None, atracdenc=None, work=None, short_fra
         container.update(style=mir.style, video_kib=mir.video_kib or None, header_kib=mir.header_kib or None)
     entry_hint = mirror.entry_hint_for(mir, True) if mir.known and mir.has_map else None
     return mux(video, sound, allow_b=True, strict=False, entry_hint=entry_hint, **container)
+
+
+def parse_keep(text):
+    """track numbers as people say them ("1" or "1,3": counted from 1) -> the list [0] or [0, 2] the code uses; empty or None = keep them all (None)"""
+    if text is None or not str(text).strip():
+        return None
+    try:
+        out = sorted({int(x) - 1 for x in str(text).replace(";", ",").split(",") if x.strip()})
+    except ValueError:
+        raise ValueError("The sound tracks to keep are numbers such as 1 or 1,3.")
+    if not out or out[0] < 0:
+        raise ValueError("Sound tracks are counted from 1.")
+    return out
+
+
+def _track_count(head):
+    """how many sound tracks a movie has, from its first bytes (the PSMF header counts its streams: the picture and then each sound track)"""
+    try:
+        return max(0, psmf.parse_header(bytes(head[:2048])).streams - 1)
+    except (ValueError, IndexError):
+        return 0
+
+
+def multitrack_movies(path, limit=12):
+    """the movies in a movie file, a folder or a game image that have several sound tracks, the biggest first for a game
+    -> [(name, loader)] where loader() gives the movie's bytes; at most `limit` of them (the headers are read, not the whole movies)"""
+    from . import shrink, umdimage
+    found = []
+    if umdimage.is_image(path):
+        img = umdimage.Image(path)
+        try:
+            for m in sorted(umdimage.find_movies(umdimage.walk(img)), key=lambda m: -m.size):
+                if _track_count(img.read(m.extent, 1)) >= 2:
+                    found.append((os.path.basename(m.name), lambda e=m.extent, n=m.size: _image_movie(path, e, n)))
+                    if len(found) >= limit:
+                        break
+        finally:
+            img.close()
+        return found
+    for full, rel in shrink.find_movies(path):
+        try:
+            with open(full, "rb") as f:
+                head = f.read(2048)
+        except OSError:
+            continue
+        if _track_count(head) >= 2:
+            found.append((rel, lambda p=full: open(p, "rb").read()))
+            if len(found) >= limit:
+                break
+    return found
+
+
+def _image_movie(path, extent, size):
+    img = umdimage.Image(path)
+    try:
+        return img.read(extent, -(-size // umdimage.SECTOR))[:size]
+    finally:
+        img.close()
+
+
+def sample_pcm(raw, track, ffmpeg, seconds=14.0, start=6.0):
+    """a few seconds of one sound track, to listen to -> 16-bit stereo 44.1 kHz bytes. It starts `start` seconds in (earlier in a short movie)."""
+    import subprocess
+    import tempfile
+    from . import snd0
+    _, _, tr, _ = demux_all(raw)
+    if track not in tr:
+        raise ValueError("That movie has no sound track %d." % (track + 1))
+    st = atrac3p.from_units(tr[track])
+    per = atrac3p.SAMPLES_PER_FRAME / atrac3p.SAMPLE_RATE
+    want = int(seconds / per)
+    first = min(int(start / per), max(0, len(st.frames) - want))
+    frames = st.frames[first:first + want]
+    if len(frames) < 8:
+        raise ValueError("The sound of this movie is too short to listen to.")
+    work = tempfile.mkdtemp(prefix="pmftrack_")
+    try:
+        at3 = os.path.join(work, "t.at3")
+        with open(at3, "wb") as f:
+            f.write(snd0.build(frames, st.frame_bytes, loop=False))
+        r = subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-i", at3, "-vn", "-ac", "2", "-ar", "44100", "-f", "s16le", "-"],
+                           capture_output=True, stdin=subprocess.DEVNULL, creationflags=0x08000000 if os.name == "nt" else 0, timeout=120)
+        if r.returncode or len(r.stdout) < 4:
+            raise ValueError("The sound could not be played.")
+        return r.stdout
+    finally:
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)

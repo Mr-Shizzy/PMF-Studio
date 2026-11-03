@@ -293,7 +293,7 @@ def _plain(img, a, b, patches, check, removal=None, over=None):
             check()
 
 
-def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframes=None, log=print, verify=True, level=9, drop_update=True):
+def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframes=None, log=print, verify=True, level=9, drop_update=True, keep=None):
     """A game's image (ISO or CSO) -> a new image at `out` (.cso or .iso) with its movies made smaller. -> list of shrink.ShrinkResult
     (one per movie; before and after are the movie's size), the images' sizes are in the last result's note.
     drop_update: take Sony's UPDATE folder (the firmware-update offer, useless on custom firmware) off the disc; its sectors become zeros."""
@@ -334,7 +334,7 @@ def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, b
             with open(p_in, "wb") as f:
                 f.write(raw)
             try:
-                r = sh.shrink_one(p_in, p_out, ffmpeg, atracdenc, ratio, sound_kbps, bframes, log)
+                r = sh.shrink_one(p_in, p_out, ffmpeg, atracdenc, ratio, sound_kbps, bframes, log, keep)
             except Cancelled:
                 raise
             except (ValueError, BuildError, OSError) as e:

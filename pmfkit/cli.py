@@ -413,15 +413,17 @@ def cmd_shrink(a):
     a.ffmpeg = tool(a.ffmpeg)
     a.atracdenc = tool(a.atracdenc) if a.atracdenc else None
     ratio = shrink.RATIOS[a.amount] if a.amount in shrink.RATIOS else float(a.amount)
+    from . import tracks as track_tools
+    keep = track_tools.parse_keep(a.keep_tracks)
     from . import umdimage
     if umdimage.is_image(a.input):                 # a game's own disc image (.cso / .iso): the movies inside it are shrunk and a new image is written
-        results = umdimage.shrink_image(a.input, a.output, a.ffmpeg, a.atracdenc, ratio, a.sound_kbps, a.bframes)
+        results = umdimage.shrink_image(a.input, a.output, a.ffmpeg, a.atracdenc, ratio, a.sound_kbps, a.bframes, keep=keep)
         image = results.pop()
         moved = [r for r in results if r.after < r.before]
         print("%d of %d movies made smaller: %.1f MB -> %.1f MB" % (len(moved), len(results), sum(r.before for r in results) / 1e6, sum(r.after for r in results) / 1e6))
         print("game image: %.1f MB -> %.1f MB (%s)" % (image.before / 1e6, image.after / 1e6, a.output))
         return
-    results = shrink.shrink(a.input, a.output, a.ffmpeg, a.atracdenc, ratio, a.sound_kbps, a.bframes)
+    results = shrink.shrink(a.input, a.output, a.ffmpeg, a.atracdenc, ratio, a.sound_kbps, a.bframes, keep=keep)
     done = [r for r in results if not r.note.startswith("failed")]
     failed = len(results) - len(done)
     before, after = sum(r.before for r in done), sum(r.after for r in done)
@@ -605,6 +607,7 @@ def main(argv=None):
     sh.add_argument("--atracdenc", help="path to atracdenc (only needed with --sound-kbps)")
     sh.add_argument("--amount", default="much", help="the share of the picture bitrate to keep: a number such as 0.5 (1.0 leaves the picture as it is and only changes the sound with --sound-kbps), or the words smaller (0.75), much (0.5), tiny (0.3)")
     sh.add_argument("--sound-kbps", type=int, help="encode the sound again at this ATRAC3plus bitrate (default: keep the sound as it is)")
+    sh.add_argument("--keep-tracks", help="for movies with several sound tracks (one per language): the track numbers to keep, counted from 1, such as 1 or 1,3. The others stay in their places but hold one frame of silence. Needs --atracdenc. Default: keep them all")
     sh.add_argument("--bframes", type=int, default=None, help="B-frames in the new picture. Default: copy what the original movie does (mirror mode: B-frames, reference frames, GOP starts, buffer numbers and entry-point map stay as they are, only the bitrate changes); a number forces that many")
     sh.set_defaults(fn=cmd_shrink)
     i = sub.add_parser("info", help="show header info of a pmf")

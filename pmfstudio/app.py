@@ -738,6 +738,11 @@ class App(tk.Tk):
         ttk.Button(f, text="A game", command=self.pick_game).pack(side="left")
         self.shrink_info = tk.Label(self.main, text="Pick one movie, a whole folder of them, or a game.", bg=T.bg, fg=T.muted, font=(FONT, 10), anchor="w", justify="left", wraplength=S(700))
         self.shrink_info.pack(fill="x", pady=(0, 8))
+        self.vars["keep"] = tk.StringVar(value="")                       # the sound tracks to keep, counted from 1 ("" = all of them)
+        self.vars["trackmode"] = tk.StringVar(value="all")
+        self.tracks_holder = tk.Frame(self.main, bg=T.bg)
+        self.tracks_holder.pack(fill="x")
+        self.track_sources = None
         self.vars["picture"] = tk.StringVar(value="0.5")
         self.vars["sound"] = tk.StringVar(value="keep")
         self.picture_holder = tk.Frame(self.main, bg=T.bg)
@@ -849,8 +854,94 @@ class App(tk.Tk):
                     self.shrink_info.configure(text="%s%d movie%s, %s. Now: picture about %s kbps, sound about %s kbps." % (
                         "The game has " if self.shrink_is_game() else "", info.count, "" if info.count == 1 else "s", self.fmt(info.total),
                         format(int(info.picture_kbps), ","), int(info.sound_kbps)), fg=T.ink)
+        if reread:
+            self.vars["keep"].set("")
+            self.vars["trackmode"].set("all")
+            self.track_sources = None
         self.shrink_out_refresh()
+        self.tracks_draw()
         self.shrink_draw()
+
+    def tracks_draw(self):
+        """movies with several sound tracks (languages): offer to keep only the ones you want"""
+        holder = getattr(self, "tracks_holder", None)
+        if not self.alive(holder):
+            return
+        for w in holder.winfo_children():
+            w.destroy()
+        info = self.shrink_info_data
+        if not info or info.tracks < 2:
+            self.vars["keep"].set("")
+            return
+        f = tk.Frame(holder, bg=T.bg)
+        f.pack(fill="x", pady=3)
+        tk.Label(f, text="Sound tracks", width=14, anchor="nw", bg=T.bg, fg=T.ink, font=(FONT, 10, "bold")).pack(side="left", anchor="n", pady=(S(6), 0))
+        Segmented(f, [("all", "Keep all\nas they are"), ("choose", "Choose which\nto keep")], self.vars["trackmode"], self.tracks_mode, pad=12).pack(side="left")
+        if self.vars["trackmode"].get() == "choose" and self.vars["keep"].get():
+            ttk.Button(f, text="Change\u2026", command=self.tracks_choose).pack(side="left", padx=(10, 0))
+        self.tracks_note = tk.Label(holder, text="", bg=T.bg, fg=T.muted, font=(FONT, 9), anchor="w", justify="left", wraplength=S(700))
+        self.tracks_note.pack(fill="x", pady=(2, 8))
+        self.tracks_text()
+
+    def tracks_text(self):
+        info = self.shrink_info_data
+        if not info or not self.alive(getattr(self, "tracks_note", None)):
+            return
+        keep = self.vars["keep"].get().strip()
+        if self.vars["trackmode"].get() == "choose" and keep:
+            many = "," in keep
+            self.tracks_note.configure(text="Keeping sound track%s %s. The other tracks stay in their places but empty, so a game that picks its track by "
+                                       "the PSP's language still finds the one you kept (movies play without sound under a language you removed)." % (
+                                           "s" if many else "", keep.replace(",", ", ")))
+        else:
+            self.tracks_note.configure(text="%s sound tracks (usually one per language) were found: up to %d per movie. All of them are kept. "
+                                       "Choose which to keep to make %s smaller." % (
+                                           "Several", info.tracks, "the game" if self.shrink_is_game() else "the movies"))
+
+    def tracks_mode(self):
+        if self.vars["trackmode"].get() == "choose":
+            self.tracks_choose()
+        else:
+            self.vars["keep"].set("")
+            self.tracks_draw()
+            self.shrink_texts()
+
+    def tracks_choose(self):
+        """the window with a Play button and a tick box for each track"""
+        from pmfkit import tracks as track_tools
+        from .trackdialog import TrackDialog
+        info = self.shrink_info_data
+        path = self.vars["src"].get().strip()
+        if self.track_sources is None:
+            self.config(cursor="watch")
+            self.update_idletasks()
+            try:
+                self.track_sources = track_tools.multitrack_movies(path)
+            except (ValueError, OSError):
+                self.track_sources = []
+            finally:
+                self.config(cursor="")
+        try:
+            now = track_tools.parse_keep(self.vars["keep"].get())
+        except ValueError:
+            now = None
+        ff = find_tool("ffmpeg")
+        if not ff:
+            messagebox.showinfo("PMF Studio", "PMF Studio can't find ffmpeg, which it needs to play the sound. Put it in the tools folder next to the program.")
+            self.vars["trackmode"].set("all")
+            self.tracks_draw()
+            return
+        answer = TrackDialog(self, self.track_sources, info.tracks, now, ff, self.shrink_is_game()).show()
+        if answer is None:                                                    # cancelled: the choice stays as it was
+            if not self.vars["keep"].get():
+                self.vars["trackmode"].set("all")
+        elif not answer:                                                      # every track ticked = keep them all
+            self.vars["keep"].set("")
+            self.vars["trackmode"].set("all")
+        else:
+            self.vars["keep"].set(",".join(str(i + 1) for i in answer))
+        self.tracks_draw()
+        self.shrink_texts()
 
     def shrink_draw(self):
         """the two rows of choices; each picture choice shows the picture bitrate it gives for these movies"""
@@ -896,7 +987,12 @@ class App(tk.Tk):
             self.sound_note.configure(text="The sound is encoded again at %s kbps%s. Lower is smaller and flatter; a sound that is already lower stays as it is.%s" % (
                 sound, was, " This is the lowest quality: some games do not accept it." if sound == "32" else ""))
         if info:
-            after = shrink.predict(info, ratio, int(sound) if sound != "keep" else None)
+            from pmfkit import tracks as track_tools
+            try:
+                kept = track_tools.parse_keep(self.vars["keep"].get())
+            except ValueError:
+                kept = None
+            after = shrink.predict(info, ratio, int(sound) if sound != "keep" else None, len(kept) if kept else None)
             self.shrink_result.configure(text="%s: about %s (now %s)." % ("The movies in the game will take" if self.shrink_is_game() else "After shrinking", self.fmt(after), self.fmt(info.total)))
         else:
             self.shrink_result.configure(text="")
@@ -1037,10 +1133,13 @@ class App(tk.Tk):
                 "Makes the .pmf movies of a game smaller so the game takes less room. Pick one movie or a whole folder. Each smaller movie keeps its name, picture size and length, "
                 "and goes to another folder: your originals are never changed. You choose how much data the picture keeps and the quality of the sound (or leave either as it is); "
                 "the page shows the picture and sound bitrates of your movies and what each choice gives. "
-                "You can also pick the whole game (A game: a .cso or .iso file). PMF Studio finds the movies inside it, shrinks them (all sound tracks of a movie, "
-                "such as one per language, are kept), and saves a new game file; only the movies change and everything else on the disc stays exactly as it was, "
+                "You can also pick the whole game (A game: a .cso or .iso file). PMF Studio finds the movies inside it, shrinks them, and saves a new game file; only the movies change and everything else on the disc stays exactly as it was, "
                 "except that Sony's UPDATE folder is emptied (the firmware update it offers is useless on custom firmware; the folder itself stays) and the game's "
                 "own XMB icon movie is never touched. "
+                "Movies with several sound tracks (usually one per language) are found for you: by default all of them are kept, or choose which to keep. "
+                "In the window that opens, press Play to hear each track and tick the ones you want; the other tracks stay in their places but empty, "
+                "which makes the movies smaller. A game such as 007 From Russia With Love picks its track by the PSP's language, so under a language you removed "
+                "its movies play without sound. "
                 "Try the new game on your PSP before you delete anything.\n\n"
                 "EBOOT icon\n"
                 "The small movie that plays in the XMB when you highlight a game. It's saved into a copy of the game's EBOOT. "

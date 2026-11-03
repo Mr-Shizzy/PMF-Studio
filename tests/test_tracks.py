@@ -172,5 +172,114 @@ class TrackGameTests(unittest.TestCase):
         self.assertFalse(os.path.exists(out))
 
 
+@unittest.skipUnless(FFMPEG and ATRAC, "needs ffmpeg and atracdenc")
+class KeepTracksTests(unittest.TestCase):
+    """the shrinker's `keep`: the same movie with only the chosen languages playing"""
+
+    @classmethod
+    def setUpClass(cls):
+        TrackTests.setUpClass()
+        cls.t = TrackTests
+        cls.src = os.path.join(cls.t.dir, "three.pmf")
+        open(cls.src, "wb").write(cls.t.three)
+
+    @classmethod
+    def tearDownClass(cls):
+        TrackTests.tearDownClass()
+
+    def run_one(self, name, **kw):
+        from pmfkit import shrink
+        out = os.path.join(self.t.dir, name)
+        r = shrink.shrink_one(self.src, out, FFMPEG, ATRAC, log=lambda *a: None, **kw)
+        return r, open(out, "rb").read()
+
+    def test_the_picture_stays_and_only_the_chosen_track_is_real(self):
+        r, raw = self.run_one("k1.pmf", ratio=1.0, keep=[1])
+        _, video, tr, _ = demux_all(raw)
+        self.assertEqual(video, self.t.video)
+        self.assertEqual(sorted(tr), [0, 1, 2])
+        self.assertEqual(tr[1], b"".join(self.t.streams[1].units()))
+        self.assertEqual([len(atrac3p.from_units(tr[i]).frames) for i in (0, 2)], [1, 1])
+        self.assertLess(r.after, r.before)
+        self.assertIn("track 2 kept", r.note)
+
+    def test_picture_and_sound_can_shrink_at_the_same_time(self):
+        r, raw = self.run_one("k2.pmf", ratio=0.5, sound_kbps=64, keep=[0])                 # (the other two tracks of this test movie are noise, not sound)
+        _, video, tr, _ = demux_all(raw)
+        self.assertEqual(sorted(tr), [0, 1, 2])
+        self.assertTrue(60 < atrac3p.from_units(tr[0]).kbps < 70)
+        self.assertEqual([len(atrac3p.from_units(tr[i]).frames) for i in (1, 2)], [1, 1])
+        self.assertLess(len(video), len(self.t.video))
+
+    def test_keeping_everything_or_nothing_that_exists_changes_nothing_about_the_tracks(self):
+        for keep in ([0, 1, 2], [7]):
+            r, raw = self.run_one("k3.pmf", ratio=1.0, keep=keep)
+            self.assertEqual(raw, self.t.three)                                    # nothing to do: copied as it is
+
+    def test_it_asks_for_the_encoder_when_empty_places_are_needed(self):
+        from pmfkit import shrink
+        with self.assertRaises(ValueError):
+            shrink.shrink_one(self.src, os.path.join(self.t.dir, "k4.pmf"), FFMPEG, None, ratio=1.0, keep=[0])
+
+    def test_the_keep_text_is_counted_from_one(self):
+        self.assertEqual(tracks.parse_keep("1"), [0])
+        self.assertEqual(tracks.parse_keep("3, 1"), [0, 2])
+        self.assertIsNone(tracks.parse_keep(""))
+        self.assertIsNone(tracks.parse_keep(None))
+        for bad in ("0", "x", "-1"):
+            with self.assertRaises(ValueError):
+                tracks.parse_keep(bad)
+
+    def test_the_size_guess_counts_the_dropped_tracks(self):
+        from pmfkit import shrink
+        info = shrink.survey(self.src)
+        self.assertEqual(info.tracks, 3)
+        self.assertLess(shrink.predict(info, 1.0, None, 1), shrink.predict(info, 1.0, None, None))
+        self.assertEqual(shrink.predict(info, 1.0, None, 3), shrink.predict(info, 1.0, None, None))
+
+    def test_the_window_command_carries_the_choice(self):
+        from pmfstudio import jobs
+        tools = {"ffmpeg": "ff.exe", "atracdenc": "at.exe"}
+        argv = jobs._shrink_argv({"picture": "0.5", "sound": "keep", "keep": "1,3"}, tools, "a.pmf", "b.pmf")
+        self.assertEqual(argv[argv.index("--keep-tracks") + 1], "1,3")
+        self.assertIn("--atracdenc", argv)
+        self.assertNotIn("--sound-kbps", argv)
+        plain = jobs._shrink_argv({"picture": "0.5", "sound": "keep", "keep": ""}, tools, "a.pmf", "b.pmf")
+        self.assertNotIn("--keep-tracks", plain)
+        self.assertNotIn("--atracdenc", plain)
+
+    def test_the_movies_with_several_tracks_are_found_and_can_be_listened_to(self):
+        folder = os.path.join(self.t.dir, "lookfolder")
+        os.makedirs(folder, exist_ok=True)
+        shutil.copyfile(self.src, os.path.join(folder, "A_THREE.PMF"))
+        open(os.path.join(folder, "B_ONE.PMF"), "wb").write(self.t.one)
+        found = tracks.multitrack_movies(folder)
+        self.assertEqual([n for n, _ in found], ["A_THREE.PMF"])
+        pcm = tracks.sample_pcm(found[0][1](), 1, FFMPEG, seconds=2.0, start=0.5)
+        self.assertGreater(len(pcm), 44100 * 4 * 1)                                # about two seconds of 16-bit stereo
+        with self.assertRaises(ValueError):
+            tracks.sample_pcm(self.t.three, 5, FFMPEG)
+
+    def test_a_whole_game_keeps_one_language_through_the_shrinker(self):
+        files = simple_files()
+        files["\\PSP_GAME\\USRDIR\\FMV\\THREE.PMF"] = self.t.three
+        root = os.path.join(self.t.dir, "kgame")
+        os.makedirs(root, exist_ok=True)
+        game, lst = make_game(root, files)
+        iso = os.path.join(self.t.dir, "kgame.iso")
+        build_umd_iso.build(game, lst, iso, log=lambda *a: None)
+        out = os.path.join(self.t.dir, "kgame_out.cso")
+        results = umdimage.shrink_image(iso, out, FFMPEG, ATRAC, ratio=1.0, keep=[2], log=lambda *a: None)
+        self.assertEqual(results.pop().note, "game image")
+        img = umdimage.Image(out)
+        try:
+            e = {x.path: x for x in umdimage.walk(img)}["\\PSP_GAME\\USRDIR\\FMV\\THREE.PMF"]
+            _, _, tr, _ = demux_all(img.read(e.extent, -(-e.size // SECTOR))[:e.size])
+            self.assertEqual(tr[2], b"".join(self.t.streams[2].units()))
+            self.assertEqual(len(atrac3p.from_units(tr[0]).frames), 1)
+        finally:
+            img.close()
+
+
 if __name__ == "__main__":
     unittest.main()
