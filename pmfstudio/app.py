@@ -886,14 +886,15 @@ class App(tk.Tk):
             self.picture_note.configure(text="The picture is left exactly as it is.")
         else:
             then = " to about %s kbps" % format(max(shrink.FLOOR_KBPS, int(info.picture_kbps * ratio)), ",") if info and info.picture_kbps else ""
-            self.picture_note.configure(text="The picture is encoded again with %d%% of its data (from about %s%s). Less data makes a smaller file and a softer picture." % (
-                round(ratio * 100), now, then))
+            self.picture_note.configure(text="The picture is encoded again with %d%% of its data (from about %s%s). Less data makes a smaller file and a softer picture.%s" % (
+                round(ratio * 100), now, then, " This is one of the smallest settings: some games do not accept it. Try the new game before you delete anything, and use a milder choice if it fails." if ratio <= 0.25 else ""))
         sound = self.vars["sound"].get()
         if sound == "keep":
             self.sound_note.configure(text="The sound is kept exactly as it is.")
         else:
             was = " (now about %d kbps)" % int(info.sound_kbps) if info and info.sound_kbps else ""
-            self.sound_note.configure(text="The sound is encoded again at %s kbps%s. Lower is smaller and flatter; a sound that is already lower stays as it is." % (sound, was))
+            self.sound_note.configure(text="The sound is encoded again at %s kbps%s. Lower is smaller and flatter; a sound that is already lower stays as it is.%s" % (
+                sound, was, " This is the lowest quality: some games do not accept it." if sound == "32" else ""))
         if info:
             after = shrink.predict(info, ratio, int(sound) if sound != "keep" else None)
             self.shrink_result.configure(text="%s: about %s (now %s)." % ("The movies in the game will take" if self.shrink_is_game() else "After shrinking", self.fmt(after), self.fmt(info.total)))
