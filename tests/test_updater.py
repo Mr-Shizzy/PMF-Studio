@@ -135,6 +135,24 @@ class SwapScriptTests(unittest.TestCase):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
+    def test_folders_travel_in_the_environment_so_accented_names_survive(self):
+        d = tempfile.mkdtemp(prefix="pmf_swap_")
+        try:
+            new, app = os.path.join(d, "nüw", "PMF Studio"), os.path.join(d, "José äpp")
+            script = updater.write_swap_script(new, app, pid=77)
+            raw = open(script, "rb").read()
+            os.remove(script)
+            raw.decode("ascii")                                                           # cmd reads the file in the OEM code page: plain ASCII only
+            self.assertNotIn(b"Jos", raw)
+            env = updater.swap_environment(script)
+            self.assertEqual((env["PMF_NEW"], env["PMF_APP"]), (new, app))
+            self.assertIn(b"%PMF_APP%", raw)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_the_result_file_of_an_offline_update_is_never_copied_from_an_update(self):
+        self.assertIn("update_result.txt", updater.KEEP)
+
     def test_cleanup_removes_only_what_the_update_left_aside(self):
         d = tempfile.mkdtemp(prefix="pmf_clean_")
         try:

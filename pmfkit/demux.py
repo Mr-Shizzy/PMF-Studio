@@ -67,11 +67,18 @@ def packs(body):
         yield pk
 
 
+def header_size(pmf):
+    """the PSMF header's size (the u32 at 0x08): 2048 for most movies, 4096 where the entry-point map needs more room (Gun Showdown's CREDITS.PMF).
+    Anything that isn't a multiple of 2048, or doesn't fit in the file, counts as 2048."""
+    n = int.from_bytes(pmf[8:12], "big")
+    return n if n >= 2048 and n % 2048 == 0 and n < len(pmf) else 2048
+
+
 def demux_all(pmf):
     """-> (Params, video_es, {track number: audio bytes}, list[Pack]). The first byte of an audio PES payload is its track (0, 1, 2...);
     the 4-byte PES prefix is not part of the audio bytes."""
     params = psmf.parse_header(pmf[:2048])
-    plist = list(packs(pmf[2048:]))
+    plist = list(packs(pmf[header_size(pmf):]))
     v, tracks = bytearray(), {}
     for pk in plist:
         for it in pk.items:

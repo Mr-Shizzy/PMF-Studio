@@ -71,6 +71,31 @@ class ShrinkMovieTests(unittest.TestCase):
         self.assertLess(r.after, r.before)
         self.assertIn("picture kept", r.note)
 
+    def big_header_copy(self):
+        """the same movie with a 4096-byte header (what Gun Showdown's CREDITS.PMF has): the header's own size field says so"""
+        raw = open(self.pmf, "rb").read()
+        head = bytearray(raw[:2048] + b"\0" * 2048)
+        head[8:12] = (4096).to_bytes(4, "big")
+        path = os.path.join(self.dir, "big_header.pmf")
+        open(path, "wb").write(bytes(head) + raw[2048:])
+        return path, raw
+
+    def test_a_header_of_4096_bytes_is_read(self):
+        from pmfkit.demux import demux_all, header_size
+        path, raw = self.big_header_copy()
+        big = open(path, "rb").read()
+        self.assertEqual((header_size(raw), header_size(big)), (2048, 4096))
+        _, v0, t0, p0 = demux_all(raw)
+        _, v1, t1, p1 = demux_all(big)
+        self.assertEqual((v1, t1, len(p1)), (v0, t0, len(p0)))
+
+    def test_a_movie_with_a_big_header_is_left_alone_for_now(self):
+        path, _ = self.big_header_copy()
+        out = os.path.join(self.dir, "big_out.pmf")
+        r = shrink.shrink(path, out, FFMPEG, ATRAC, ratio=0.5)[0]
+        self.assertTrue(r.note.startswith("failed"), r.note)
+        self.assertFalse(os.path.exists(out))
+
     def test_survey_and_prediction(self):
         info = shrink.survey(self.pmf)
         self.assertEqual(info.count, 1)

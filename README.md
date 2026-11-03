@@ -38,7 +38,11 @@ Get the zip from the Releases page, unzip anywhere, run `PMF Studio.exe`. Window
 ## Status
 
 Beta. Everything was checked on one PSP (firmware 6.61 with ARK-5 and CXMB). Not tested yet on a PSP: movies for the C-Intro
-plugin, and smaller game movies inside a game (they play and pass the checks here; whether a given game accepts them is up to the game, so try one first). The size limits come from tests on that PSP and may differ on other setups.
+plugin. Smaller game movies have run inside real games (a shrunk game with 50% picture ran fine in two of them), but at the lowest
+picture and sound settings one game did not: whether a given game accepts the smaller movies is up to the game, so try the new
+game before you delete anything, and start with a milder choice. When it shrinks a whole game it also empties Sony's UPDATE folder
+(the firmware-update offer, useless on custom firmware) and never touches the game's XMB icon. The size limits come from tests on
+that PSP and may differ on other setups.
 
 ## Running from the source
 

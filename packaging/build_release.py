@@ -18,6 +18,7 @@ Third-party programs are never committed; they only appear in the release folder
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -112,6 +113,13 @@ def pyinstaller():
     return os.path.join(BUILD, "dist", NAME)
 
 
+def atracdenc_source_files(folder):
+    """BASE_COMMIT.txt, README.txt and EVERY patch in tools\\atracdenc: the shipped atracdenc.exe is built with all of them, and its
+    licence (LGPL-2.1) means the release must carry the same changes (a fixed list once left one out)"""
+    patches = sorted(f for f in os.listdir(folder) if f.endswith(".patch"))
+    return ["BASE_COMMIT.txt", "README.txt"] + patches
+
+
 def assemble(packed, zpath, pin):
     shutil.rmtree(FOLDER, ignore_errors=True)
     shutil.copytree(packed, FOLDER)
@@ -121,7 +129,7 @@ def assemble(packed, zpath, pin):
     unpack_ffmpeg(zpath, tools, lic)
     atrac = os.path.join(ROOT, "tools", "atracdenc")
     shutil.copy(os.path.join(atrac, "bin", "atracdenc.exe"), os.path.join(tools, "atracdenc.exe"))
-    for f in ("BASE_COMMIT.txt", "README.txt", "frame-size.patch", "tonal-trim.patch", "windows-no-libsndfile.patch"):
+    for f in atracdenc_source_files(atrac):
         shutil.copy(os.path.join(atrac, f), src)
     shutil.copy(os.path.join(ROOT, "packaging", "licenses", "atracdenc-LICENSE-LGPL-2.1.txt"), lic)
     shutil.copy(os.path.join(sys.base_prefix, "LICENSE.txt"), os.path.join(lic, "python-LICENSE.txt"))
@@ -151,8 +159,11 @@ def selftest():
         sys.exit("the self-test failed - not zipping")
 
 
+PERSONAL_MAIL = re.compile(rb"[A-Za-z0-9._%+-]+@(?:gmail|googlemail|outlook|hotmail|live|yahoo|icloud|proton|protonmail)\.[a-z]{2,}", re.I)
+
+
 def scan_personal():
-    """no user names or personal paths inside the release (text files, programs and Python files alike)"""
+    """no user names, personal paths or personal mail addresses inside the release (text files, programs and Python files alike)"""
     words = [w.encode() for w in {os.environ.get("USERNAME", ""), os.path.basename(os.path.expanduser("~"))} if len(w) > 2]
     bad = []
     for dp, _, files in os.walk(FOLDER):
@@ -161,9 +172,12 @@ def scan_personal():
             if os.path.getsize(p) > 400_000_000:
                 continue
             data = open(p, "rb").read()
+            low = data.lower()
             for w in words:
-                if w.lower() in data.lower():
-                    bad.append((os.path.relpath(p, FOLDER), w.decode(), data.lower().count(w.lower())))
+                if w.lower() in low:
+                    bad.append((os.path.relpath(p, FOLDER), w.decode(), low.count(w.lower())))
+            for m in set(PERSONAL_MAIL.findall(data)):
+                bad.append((os.path.relpath(p, FOLDER), "a personal e-mail address (%s...)" % m[:3].decode("latin1"), data.count(m)))
     return bad
 
 

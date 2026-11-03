@@ -23,8 +23,9 @@ atracdenc  (tools\atracdenc.exe)
 --------------------------------
 An open ATRAC3plus encoder by Daniil Cherednik and contributors: https://github.com/dcherednik/atracdenc
 Licence: GNU Lesser General Public License version 2.1 (licenses\atracdenc-LICENSE-LGPL-2.1.txt).
-Source:  the upstream commit named in source\atracdenc\BASE_COMMIT.txt, plus three small patches made for PMF Studio, which are
-         included in source\atracdenc\ (the patches are under the same LGPL-2.1 licence). source\atracdenc\README.txt gives the exact
+Source:  the upstream commit named in source\atracdenc\BASE_COMMIT.txt, plus four small patches made for PMF Studio (frame-size,
+         tonal-trim, adaptive-precision, windows-no-libsndfile), which are all included in source\atracdenc\ (the patches are under the
+         same LGPL-2.1 licence). source\atracdenc\README.txt gives the exact
          build commands. The program you have was built from that source with those commands.
 
 

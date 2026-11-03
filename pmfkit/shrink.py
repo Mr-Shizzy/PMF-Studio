@@ -12,7 +12,7 @@ import shutil
 import tempfile
 
 from . import atrac3p, snd0
-from .demux import demux, demux_all, duration_seconds
+from .demux import demux, demux_all, duration_seconds, header_size
 from .extract import load_pmf
 from .h264 import split_access_units
 from .mux import mux, HEADER_KIB
@@ -147,6 +147,8 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
     Raises ValueError with a plain message when the file can't be used. -> ShrinkResult"""
     from .cli import PROGRESS
     raw = load_pmf(src)
+    if header_size(raw) != 2048:
+        raise ValueError("This movie has a bigger header than PMF Studio can write yet, so it was left as it is.")
     params, video, tracks, _ = demux_all(raw)
     if not video:
         raise ValueError("There is no picture in that movie.")

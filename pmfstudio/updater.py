@@ -27,7 +27,7 @@ ASSET = re.compile(r"PMF-Studio-.+-win64\.zip")
 EXE = "PMF Studio.exe"
 PARTS = ("_internal", "tools", "licenses", "source")                       # folders that belong to the program (swapped as a whole)
 PART_FILES = (EXE, "LICENSE", "THIRD_PARTY_NOTICES.txt", "README.txt")      # files that belong to the program
-KEEP = ("Output", "temp", "PMF Studio settings.json", "selftest_result.txt", "update_log.txt")      # never copied from an update, never removed
+KEEP = ("Output", "temp", "PMF Studio settings.json", "selftest_result.txt", "update_log.txt", "update_result.txt")      # never copied from an update, never removed
 MAX_UNPACKED = 700_000_000
 MAX_ENTRIES = 6000
 
@@ -183,9 +183,11 @@ def selftest(new_dir, expect_tag, timeout=420, cancelled=lambda: False):
 
 SWAP = r"""@echo off
 setlocal
-set "NEW={new}"
-set "APP={app}"
-set "LOG={app}\update_log.txt"
+rem the two folders arrive as environment variables, never as text in this file: cmd reads a batch file in the old OEM code page, so a
+rem folder name with letters like e-acute or u-umlaut would come out garbled here and the swap would fail
+set "NEW=%PMF_NEW%"
+set "APP=%PMF_APP%"
+set "LOG=%APP%\update_log.txt"
 echo [%date% %time%] waiting for PMF Studio (process {pid}) to close >> "%LOG%"
 set /a waited=0
 :wait
@@ -259,21 +261,34 @@ exit /b 1
 """
 
 
+class SwapScript(str):
+    """the path of the batch file; it also remembers the two folders the batch file needs (handed to it as environment variables)"""
+    new_dir = app_dir = ""
+
+
 def write_swap_script(new_dir, app_dir, pid=None):
     """a batch file that waits for this program to end, swaps the program's files, starts the new version, and undoes it all if that fails"""
-    text = SWAP.format(new=new_dir, app=app_dir, pid=pid or os.getpid(), exe=EXE,
-                       parts=" ".join(PARTS), files=" ".join('"%s"' % f for f in PART_FILES))
+    text = SWAP.format(pid=pid or os.getpid(), exe=EXE, parts=" ".join(PARTS), files=" ".join('"%s"' % f for f in PART_FILES))
     bat = os.path.join(tempfile.gettempdir(), "pmfstudio_swap_%d.bat" % (pid or os.getpid()))
     with open(bat, "wb") as f:
-        f.write(text.replace("\n", "\r\n").encode("utf-8"))              # bytes: text mode would turn \r\n into \r\r\n
-    return bat
+        f.write(text.replace("\n", "\r\n").encode("ascii"))              # bytes: text mode would turn \r\n into \r\r\n; plain ASCII on purpose (see SWAP)
+    script = SwapScript(bat)
+    script.new_dir, script.app_dir = new_dir, app_dir
+    return script
+
+
+def swap_environment(script):
+    """the environment the batch file runs in: this program's, without the bookkeeping variables of a PyInstaller program (a program relaunched
+    from inside itself would otherwise try to reuse this run's folder, which is gone), plus the two folders"""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    env["PMF_NEW"], env["PMF_APP"] = script.new_dir, script.app_dir
+    return env
 
 
 def run_swap(script):
-    """start the batch file detached, with the bookkeeping variables of this PyInstaller program removed from its environment (a program
-    relaunched from inside itself would otherwise try to reuse this run's folder, which is gone)"""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
-    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    """start the batch file detached"""
+    env = swap_environment(script)
     # a hidden console of its own (no window) and a group of its own: the batch file's helper commands (tasklist, ping, robocopy) need a
     # console, and with the DETACHED_PROCESS flag the script hung at its first one (found in testing)
     subprocess.Popen(["cmd", "/c", script], creationflags=0x08000000 | 0x00000200, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
