@@ -92,6 +92,96 @@ def walk(img):
     return files
 
 
+def _dirs(img):
+    """every folder on the disc, root first -> list of (path, extent, size, rec_sector, rec_offset, rec_len); the root has no record (None, None, 0)"""
+    pvd = img.sector(16)
+    root = pvd[156:190]
+    start = (struct.unpack("<I", root[2:6])[0], struct.unpack("<I", root[10:14])[0])
+    out, stack, seen = [("", start[0], start[1], None, None, 0)], [("", start[0], start[1])], set()
+    while stack:
+        path, lba, size = stack.pop()
+        if lba in seen or size <= 0 or lba + size // SECTOR > img.sectors + 1:
+            continue
+        seen.add(lba)
+        data = img.read(lba, -(-size // SECTOR))
+        o = 0
+        while o < len(data):
+            n = data[o]
+            if n == 0:
+                o = (o // SECTOR + 1) * SECTOR
+                continue
+            rec = data[o:o + n]
+            if len(rec) < 34 or o // SECTOR != (o + n - 1) // SECTOR:
+                raise ValueError("The disc's directory records are damaged.")
+            ident = rec[33:33 + rec[32]]
+            if ident not in (b"\x00", b"\x01") and rec[25] & 2:
+                name = ident.decode("latin1").split(";")[0]
+                extent, length = struct.unpack("<I", rec[2:6])[0], struct.unpack("<I", rec[10:14])[0]
+                out.append((path + "\\" + name, extent, length, lba + o // SECTOR, o % SECTOR, n))
+                stack.append((path + "\\" + name, extent, length))
+            o += n
+    return out
+
+
+UPDATE_DIR = "\\PSP_GAME\\SYSDIR\\UPDATE"      # Sony's own firmware-update offer: obsolete, never wanted on custom firmware
+
+
+class UpdateRemoval:
+    """what emptying the UPDATE folder changes: its directory sectors lose the records of the files in it (the folder, with its '.' and '..',
+    stays) and the sectors that held those files become zeros"""
+
+    def __init__(self, extra, wipe, files, nbytes):
+        self.extra, self.wipe, self.files, self.bytes = extra, wipe, files, nbytes
+
+    @property
+    def touched(self):
+        return set(self.extra) | self.wipe
+
+
+def _sectors_of(extent, size):
+    return range(extent, extent + -(-size // SECTOR))
+
+
+def plan_update_removal(img, entries, keep_sectors=()):
+    """None when there is nothing to empty (no UPDATE folder, no files in it, or it has folders of its own / shares sectors with something else:
+    then it is left alone); otherwise an UpdateRemoval. keep_sectors: sectors that must not change (directory sectors with other edits)."""
+    dirs = _dirs(img)
+    top = next((d for d in dirs if d[0].upper() == UPDATE_DIR), None)
+    if top is None or any(d[0].upper().startswith(UPDATE_DIR + "\\") for d in dirs):
+        return None
+    files = [e for e in entries if e.path.upper().startswith(UPDATE_DIR + "\\")]
+    if not files:
+        return None
+    dir_sectors = list(_sectors_of(top[1], top[2]))
+    if set(dir_sectors) & set(keep_sectors):
+        return None
+    used = set(range(0, dirs[0][1]))                         # the system area, volume descriptors and path tables
+    for d in dirs:
+        used.update(_sectors_of(d[1], d[2]))
+    for e in entries:
+        if e not in files:
+            used.update(_sectors_of(e.extent, e.size))
+    wipe = set()
+    for e in files:
+        wipe.update(_sectors_of(e.extent, e.size))
+    wipe -= used
+    data = img.read(top[1], len(dir_sectors))
+    keep = b""
+    o = 0
+    for _ in range(2):                                       # the '.' and '..' records stay
+        n = data[o]
+        ident = data[o + 33:o + 33 + data[o + 32]]
+        if not n or ident not in (b"\x00", b"\x01"):
+            return None
+        keep += data[o:o + n]
+        o += n
+    new = keep.ljust(len(data), b"\0")
+    extra = {top[1] + k: new[k * SECTOR:(k + 1) * SECTOR] for k in range(len(dir_sectors))}
+    if wipe & set(extra):
+        return None
+    return UpdateRemoval(extra, wipe, files, sum(e.size for e in files))
+
+
 class Movie:
     """one movie on the disc: its data, and every name that points at it"""
 
@@ -110,10 +200,13 @@ class Movie:
         return img.read(self.extent, self.sectors)[:self.size]
 
 
+LEAVE_ALONE = ("\\PSP_GAME\\ICON1.PMF",)          # the XMB's own icon movie: tiny, belongs to the menu, never worth any risk
+
+
 def find_movies(entries):
     groups = defaultdict(list)
     for e in entries:
-        if e.path.upper().endswith(".PMF") and e.size > 0:
+        if e.path.upper().endswith(".PMF") and e.size > 0 and e.path.upper() not in LEAVE_ALONE:
             groups[(e.extent, e.size)].append(e)
     per_extent = defaultdict(int)
     for (ex, _) in groups:
@@ -141,9 +234,9 @@ class Replacement:
         self.movie, self.path, self.new_size = movie, path, new_size
 
 
-def _blocks(img, replacements, check):
+def _blocks(img, replacements, check, removal=None):
     """every sector of the new image in order: the old sector, the new movie data (padded with zeros to the old length), or a directory sector
-    with the size of a replaced movie corrected"""
+    with the size of a replaced movie corrected; with `removal`, also the sectors the UPDATE folder's removal changes"""
     patches = defaultdict(list)
     for rp in replacements:
         for e in rp.movie.entries:
@@ -151,21 +244,26 @@ def _blocks(img, replacements, check):
     lba = 0
     for rp in sorted(replacements, key=lambda r: r.movie.extent):
         start = rp.movie.extent
-        yield from _plain(img, lba, start, patches, check)
+        yield from _plain(img, lba, start, patches, check, removal)
         with open(rp.path, "rb") as f:
             data = f.read().ljust(rp.movie.sectors * SECTOR, b"\0")                      # the movie, then zeros up to the old length
         for k in range(0, len(data), SECTOR):
             yield data[k:k + SECTOR]
         lba = start + rp.movie.sectors
-    yield from _plain(img, lba, img.sectors, patches, check)
+    yield from _plain(img, lba, img.sectors, patches, check, removal)
 
 
-def _plain(img, a, b, patches, check):
+def _plain(img, a, b, patches, check, removal=None):
     n = 0
     for first in range(a, b, CHUNK):
         data = img.read(first, min(CHUNK, b - first))
         for k in range(len(data) // SECTOR):
             sec = data[k * SECTOR:(k + 1) * SECTOR]
+            if removal is not None:
+                if first + k in removal.extra:
+                    sec = removal.extra[first + k]
+                elif first + k in removal.wipe:
+                    sec = b"\0" * SECTOR
             if first + k in patches:
                 sec = bytearray(sec)
                 for off, size in patches[first + k]:
@@ -178,9 +276,10 @@ def _plain(img, a, b, patches, check):
             check()
 
 
-def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframes=1, log=print, verify=True, level=9):
+def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bframes=1, log=print, verify=True, level=9, drop_update=True):
     """A game's image (ISO or CSO) -> a new image at `out` (.cso or .iso) with its movies made smaller. -> list of shrink.ShrinkResult
-    (one per movie; before and after are the movie's size), the images' sizes are in the last result's note."""
+    (one per movie; before and after are the movie's size), the images' sizes are in the last result's note.
+    drop_update: take Sony's UPDATE folder (the firmware-update offer, useless on custom firmware) off the disc; its sectors become zeros."""
     import shutil
     import tempfile
     from . import shrink as sh
@@ -191,7 +290,8 @@ def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, b
     work = tempfile.mkdtemp(prefix="pmfgame_")
     try:
         try:
-            movies = find_movies(walk(img))
+            entries = walk(img)
+            movies = find_movies(entries)
         except ValueError as e:
             raise BuildError(str(e))
         if not movies:
@@ -240,10 +340,20 @@ def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, b
             raise BuildError("None of the movies could be made smaller, so no new game was written.")
 
         # the new image: the same disc with the smaller movies in the same places
+        removal = None
+        if drop_update:
+            try:
+                removal = plan_update_removal(img, entries, {e.rec_sector for rp in replacements for e in rp.movie.entries})
+            except (ValueError, struct.error) as e:
+                removal = None
+                log("The update folder was left on the disc (%s)." % e)
+            if removal:
+                log("The UPDATE folder is emptied (%d files, %.1f MB): Sony's firmware update offer is useless on custom firmware."
+                    % (len(removal.files), removal.bytes / 1e6))
         PROGRESS.window(0.85, 0.97)
         PROGRESS.report(0.0, "Writing the new game…")
         total_bytes = img.size
-        blocks = _blocks(img, replacements, check_cancel)
+        blocks = _blocks(img, replacements, check_cancel, removal)
         tmp = out + ".part"
         try:
             if out.lower().endswith(".iso"):
@@ -263,7 +373,7 @@ def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, b
         if verify:
             PROGRESS.window(0.97, 1.0)
             PROGRESS.report(0.0, "Checking the new game…")
-            problem = _verify(img, out, replacements, check_cancel)
+            problem = _verify(img, out, replacements, check_cancel, removal)
             if problem:
                 try:
                     os.remove(out)
@@ -278,15 +388,19 @@ def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, b
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _verify(old, out_path, replacements, check):
-    """None when the new image is the old one with exactly the replaced movies changed: same files at the same places, replaced movies equal to
-    the smaller ones and sized right, every other sector equal to the old one"""
+def _verify(old, out_path, replacements, check, removal=None):
+    """None when the new image is the old one with exactly the replaced movies changed (and the UPDATE folder emptied, if that was planned):
+    same files at the same places, replaced movies equal to the smaller ones and sized right, every other sector equal to the old one"""
     new = Image(out_path)
     try:
         if new.sectors != old.sectors:
             return "its length changed"
         a = {(e.path, e.extent): e.size for e in walk(old)}
         b = {(e.path, e.extent): e.size for e in walk(new)}
+        if removal:
+            a = {k: v for k, v in a.items() if k not in {(e.path, e.extent) for e in removal.files}}
+            if not any(d[0].upper() == UPDATE_DIR for d in _dirs(new)):
+                return "the UPDATE folder itself went missing"
         if set(a) != set(b):
             return "the files or their places changed"
         changed = {}
@@ -301,6 +415,8 @@ def _verify(old, out_path, replacements, check):
         for rp in replacements:
             skip.update(range(rp.movie.extent, rp.movie.extent + rp.movie.sectors))
         skip |= patched
+        if removal:
+            skip |= removal.touched
         for first in range(0, old.sectors, CHUNK):
             n = min(CHUNK, old.sectors - first)
             x, y = old.read(first, n), new.read(first, n)
@@ -309,6 +425,13 @@ def _verify(old, out_path, replacements, check):
                     return "sector %d changed" % (first + k)
             if (first // CHUNK) % 16 == 0:
                 check()
+        if removal:
+            for n, wanted in removal.extra.items():
+                if new.sector(n) != wanted:
+                    return "the emptied UPDATE folder was not written right"
+            for n in removal.wipe:
+                if any(new.sector(n)):
+                    return "the sectors of the update files are not empty"
         for rp in replacements:
             data = new.read(rp.movie.extent, rp.movie.sectors)
             with open(rp.path, "rb") as f:

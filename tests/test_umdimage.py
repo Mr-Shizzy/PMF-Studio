@@ -239,6 +239,14 @@ class ImageReadTests(unittest.TestCase):
 
 
 @unittest.skipUnless(FFMPEG and ATRAC, "needs ffmpeg and atracdenc")
+class LeaveTheIconAloneTests(unittest.TestCase):
+    def test_the_xmb_icon_movie_is_never_a_movie_to_shrink(self):
+        entries = [umdimage.Entry("\\PSP_GAME\\ICON1.PMF", 100, 346112, 22, 0), umdimage.Entry("\\PSP_GAME\\USRDIR\\FMV\\INTRO.PMF", 500, 900000, 22, 96),
+                   umdimage.Entry("\\PSP_GAME\\USRDIR\\FMV\\ICON1.PMF", 2000, 300000, 22, 192)]
+        self.assertEqual([m.name for m in umdimage.find_movies(entries)],
+                         ["\\PSP_GAME\\USRDIR\\FMV\\INTRO.PMF", "\\PSP_GAME\\USRDIR\\FMV\\ICON1.PMF"])        # only the menu's own icon is spared
+
+
 class ShrinkGameTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -257,6 +265,8 @@ class ShrinkGameTests(unittest.TestCase):
         files["\\PSP_GAME\\USRDIR\\FMV\\ONE.PMF"] = one
         files["\\PSP_GAME\\USRDIR\\FMV\\TWO_TRACKS.PMF"] = two
         files["\\PSP_GAME\\USRDIR\\LAST.BIN"] = bytes(random.Random(1).randrange(256) for _ in range(20000))             # a file after the movies
+        for name, n in (("EBOOT.BIN", 60000), ("DATA.BIN", 9000), ("PARAM.SFO", 600)):                                  # Sony's firmware update offer
+            files["\\PSP_GAME\\SYSDIR\\UPDATE\\" + name] = bytes(random.Random(n).randrange(256) for _ in range(n))
         cls.one, cls.two = one, two
         cls.game, cls.list = make_game(cls.dir, files, shared=[("\\PSP_GAME\\USRDIR\\FMV\\ONE_FR.PMF", "\\PSP_GAME\\USRDIR\\FMV\\ONE.PMF")])
         cls.iso = os.path.join(cls.dir, "game.iso")
@@ -276,17 +286,19 @@ class ShrinkGameTests(unittest.TestCase):
     def check_shrunk(self, out):
         old, old_sectors = self.entries(self.iso)
         new, new_sectors = self.entries(out)
-        self.assertEqual(set(old), set(new))
+        upd = "\\PSP_GAME\\SYSDIR\\UPDATE\\"
+        self.assertTrue(any(p.startswith(upd) for p in old))
+        self.assertEqual(set(p for p in old if not p.startswith(upd)), set(new))    # the update files are gone, everything else is still there
         self.assertEqual(old_sectors, new_sectors)                                  # same length: every file stays where it was
-        for path, e in old.items():
-            self.assertEqual(e.extent, new[path].extent, path)
+        for path, e in new.items():
+            self.assertEqual(old[path].extent, e.extent, path)
         fmv = "\\PSP_GAME\\USRDIR\\FMV\\"
         self.assertLess(new[fmv + "ONE.PMF"].size, old[fmv + "ONE.PMF"].size)
         self.assertLess(new[fmv + "TWO_TRACKS.PMF"].size, old[fmv + "TWO_TRACKS.PMF"].size)
         self.assertEqual(new[fmv + "ONE_FR.PMF"].size, new[fmv + "ONE.PMF"].size)  # a second name for the same movie follows it
         self.assertEqual(new[fmv + "ONE_FR.PMF"].extent, new[fmv + "ONE.PMF"].extent)
-        other = [p for p in old if "FMV" not in p]
-        for p in other:                                                              # every other file has its bytes and its size
+        other = [p for p in new if "FMV" not in p]
+        for p in other:                                                            # every other file has its bytes and its size
             self.assertEqual(old[p].size, new[p].size, p)
         return new
 
@@ -309,6 +321,36 @@ class ShrinkGameTests(unittest.TestCase):
                 self.assertEqual(img.read(last.extent, -(-last.size // SECTOR))[:last.size], bytes(random.Random(1).randrange(256) for _ in range(20000)))
             finally:
                 img.close()
+
+    def test_the_update_folder_is_emptied_but_stays(self):
+        out = os.path.join(self.dir, "noupdate.cso")
+        umdimage.shrink_image(self.iso, out, FFMPEG, ATRAC, ratio=0.5, bframes=0, log=lambda *a: None)
+        img = umdimage.Image(out)
+        try:
+            self.assertIn(umdimage.UPDATE_DIR, [d[0].upper() for d in umdimage._dirs(img)])           # the folder itself is still on the disc
+            self.assertEqual([e.path for e in umdimage.walk(img) if "\\UPDATE\\" in e.path.upper()], [])
+            self.assertTrue(any(e.path.endswith("EBOOT.BIN") for e in umdimage.walk(img)))              # the game's own EBOOT.BIN is not touched
+        finally:
+            img.close()
+        kept = os.path.join(self.dir, "withupdate.cso")                                                # the option to leave it as it was
+        umdimage.shrink_image(self.iso, kept, FFMPEG, ATRAC, ratio=0.5, bframes=0, log=lambda *a: None, drop_update=False)
+        img = umdimage.Image(kept)
+        try:
+            self.assertEqual(len([e for e in umdimage.walk(img) if "\\UPDATE\\" in e.path.upper()]), 3)
+        finally:
+            img.close()
+        src = umdimage.Image(self.iso)
+        try:
+            gone = [e for e in umdimage.walk(src) if "\\UPDATE\\" in e.path.upper() and e.size > 20000]
+        finally:
+            src.close()
+        self.assertTrue(gone)
+        img = umdimage.Image(out)
+        try:
+            for e in gone:                                                                              # the update file's sectors are empty now
+                self.assertFalse(any(img.read(e.extent, -(-e.size // SECTOR))))
+        finally:
+            img.close()
 
     def test_the_source_image_is_never_overwritten(self):
         with self.assertRaises(cli.BuildError):
