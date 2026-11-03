@@ -192,27 +192,33 @@ def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead):
 
 class _AudioFeeder:
     def __init__(self, audio, style, pts_base=AUDIO_PTS_BASE, second_floor=AUDIO2_FLOOR):
-        """audio: one Atrac3pStream, or a list of them for a movie with several sound tracks (languages): the tracks must have the
-        same frame size and the same length. Retail files (007 From Russia With Love) send each audio pack once per track, one after the
-        other with the same time stamp, the track number as first byte of the payload."""
+        """audio: one Atrac3pStream, or a list of them for a movie with several sound tracks (languages). Retail files (007 From Russia With
+        Love) send each audio pack once per track, one after the other with the same time stamp, the track number as first byte of the
+        payload: tracks of the same frame size and length are sent that way. A track of another frame size or length (a silent stand-in
+        for a language, at a lower bitrate or just a few frames long) gets its own schedule instead: a pack whenever it has fallen behind
+        the track the packing follows (the one with the most data), and none once it has run out."""
         self.pts_base, self.second_floor = pts_base, second_floor
         tracks = list(audio) if isinstance(audio, (list, tuple)) else [audio]
-        if len({(t.unit_bytes, len(t.frames)) for t in tracks}) != 1:
-            raise ValueError("all sound tracks must have the same frame size and the same length")
         self.ntracks = len(tracks)
         self.ess = [b"".join(t.units()) for t in tracks]
-        self.es = self.ess[0]
-        audio = tracks[0]
-        self.U = audio.unit_bytes
+        self.Us = [t.unit_bytes for t in tracks]
+        self.lead = max(range(len(tracks)), key=lambda i: (len(self.ess[i]), -i))
+        shape = (self.Us[self.lead], len(self.ess[self.lead]))
+        self.slow = [(self.Us[i], len(self.ess[i])) != shape for i in range(len(tracks))]
+        self.gs = [0] * len(tracks)                      # where each slow track is
+        self.es = self.ess[self.lead]
+        self.U = self.Us[self.lead]
         self.ext = PROFILES[style]["audio_ext"]
         self.g = 0
         self.count = 0
 
     def done(self):
-        return self.g >= len(self.es)
+        return self.g >= len(self.es) and all(self.gs[i] >= len(self.ess[i]) for i in range(self.ntracks) if self.slow[i])
 
     def next_floor(self):
         """90 kHz time at which the audio buffer has room for the next pack; None = right away."""
+        if self.g >= len(self.es):
+            return None
         if self.count == 1:
             return self.second_floor
         need = self.g + PACK - 14 - 9 - 5 - 4 - AUDIO_BUF
@@ -221,25 +227,42 @@ class _AudioFeeder:
         i = -(-need // self.U) - 1                      # last unit that must have been decoded
         return int(self.pts_base + i * AUDIO_UNIT_TICKS)
 
-    def build_group(self, with_ext):
-        """the next audio packs: one per sound track, same position in the sound and same time stamp -> list of entries"""
+    def _pack(self, track, g, take, U, with_ext):
+        es = self.ess[track]
         hl = 8 if with_ext else 5
-        take = min(len(self.es) - self.g, PACK - 14 - 9 - hl - 4)
-        ptr = (-self.g) % self.U
+        e = _Entry()
+        e.kind, e.gop, e.gop_start, e.cum_end, e.floor, e.pos = "a", None, False, 0, None, None
+        ptr = (-g) % U
+        if ptr < take:
+            payload = bytes([track, 0]) + ptr.to_bytes(2, "big") + es[g:g + take]
+            pts = int(self.pts_base + ((g + ptr) // U) * AUDIO_UNIT_TICKS)
+            fields = ts(2, pts) + (self.ext if with_ext else b"")
+            e.body = pes(0xBD, 0x81 if with_ext else 0x80, fields, payload, PACK - 14)
+        else:                                        # no unit header starts in this pack (stream tail): no PTS, ptr 0xFFFF
+            payload = bytes([track, 0]) + b"\xff\xff" + es[g:g + take]
+            e.body = pes(0xBD, 0x00, b"", payload, PACK - 14)
+        return e
+
+    def build_group(self, with_ext):
+        """the next audio packs: one per sound track, same position in the sound and same time stamp -> list of entries.
+        A track on its own schedule only appears when it is due."""
+        room = PACK - 14 - 9 - (8 if with_ext else 5) - 4
+        lead_done = self.g >= len(self.es)
+        take = min(len(self.es) - self.g, room)
+        sent = self.g // self.U
         group = []
-        for track, es in enumerate(self.ess):
-            e = _Entry()
-            e.kind, e.gop, e.gop_start, e.cum_end, e.floor, e.pos = "a", None, False, 0, None, None
-            if ptr < take:
-                payload = bytes([track, 0]) + ptr.to_bytes(2, "big") + es[self.g:self.g + take]
-                pts = int(self.pts_base + ((self.g + ptr) // self.U) * AUDIO_UNIT_TICKS)
-                fields = ts(2, pts) + (self.ext if with_ext else b"")
-                e.body = pes(0xBD, 0x81 if with_ext else 0x80, fields, payload, PACK - 14)
-            else:                                    # no unit header starts in this pack (stream tail): no PTS, ptr 0xFFFF
-                payload = bytes([track, 0]) + b"\xff\xff" + es[self.g:self.g + take]
-                e.body = pes(0xBD, 0x00, b"", payload, PACK - 14)
-            group.append(e)
-        self.g += take
+        for track in range(self.ntracks):
+            if self.slow[track]:
+                g, U = self.gs[track], self.Us[track]
+                if g >= len(self.ess[track]) or (not lead_done and g // U > sent):
+                    continue
+                t = min(len(self.ess[track]) - g, room)
+                group.append(self._pack(track, g, t, U, with_ext))
+                self.gs[track] += t
+            elif not lead_done:
+                group.append(self._pack(track, self.g, take, self.U, with_ext))
+        if not lead_done:
+            self.g += take
         self.count += 1
         return group
 

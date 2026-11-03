@@ -234,26 +234,41 @@ class Replacement:
         self.movie, self.path, self.new_size = movie, path, new_size
 
 
-def _blocks(img, replacements, check, removal=None):
+def _blocks(img, replacements, check, removal=None, files=None):
     """every sector of the new image in order: the old sector, the new movie data (padded with zeros to the old length), or a directory sector
     with the size of a replaced movie corrected; with `removal`, also the sectors the UPDATE folder's removal changes"""
     patches = defaultdict(list)
     for rp in replacements:
         for e in rp.movie.entries:
             patches[e.rec_sector].append((e.rec_offset, rp.new_size))
+    over = _file_sectors(files, patches)
     lba = 0
     for rp in sorted(replacements, key=lambda r: r.movie.extent):
         start = rp.movie.extent
-        yield from _plain(img, lba, start, patches, check, removal)
+        yield from _plain(img, lba, start, patches, check, removal, over)
         with open(rp.path, "rb") as f:
             data = f.read().ljust(rp.movie.sectors * SECTOR, b"\0")                      # the movie, then zeros up to the old length
         for k in range(0, len(data), SECTOR):
             yield data[k:k + SECTOR]
         lba = start + rp.movie.sectors
-    yield from _plain(img, lba, img.sectors, patches, check, removal)
+    yield from _plain(img, lba, img.sectors, patches, check, removal, over)
 
 
-def _plain(img, a, b, patches, check, removal=None):
+def _file_sectors(files, patches):
+    """files: [(Entry, bytes)], each no bigger than the sectors the file has now -> {sector: new data}; the file's size is patched in its directory record"""
+    over = {}
+    for ent, data in files or []:
+        cap = -(-ent.size // SECTOR)
+        if len(data) > cap * SECTOR:
+            raise ValueError("%s has room for %d bytes, not %d" % (ent.path, cap * SECTOR, len(data)))
+        body = data.ljust(cap * SECTOR, b"\0")
+        for k in range(cap):
+            over[ent.extent + k] = body[k * SECTOR:(k + 1) * SECTOR]
+        patches[ent.rec_sector].append((ent.rec_offset, len(data)))
+    return over
+
+
+def _plain(img, a, b, patches, check, removal=None, over=None):
     n = 0
     for first in range(a, b, CHUNK):
         data = img.read(first, min(CHUNK, b - first))
@@ -264,6 +279,8 @@ def _plain(img, a, b, patches, check, removal=None):
                     sec = removal.extra[first + k]
                 elif first + k in removal.wipe:
                     sec = b"\0" * SECTOR
+            if over and first + k in over:
+                sec = over[first + k]
             if first + k in patches:
                 sec = bytearray(sec)
                 for off, size in patches[first + k]:
@@ -388,7 +405,115 @@ def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, b
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _verify(old, out_path, replacements, check, removal=None):
+def retrack_image(src, out, keep, others, ffmpeg=None, atracdenc=None, log=print, verify=True, level=9, files=None, short_frames=1):
+    """A game's image (ISO or CSO) -> a new image at `out` in which every movie with several sound tracks keeps only the tracks in `keep`
+    (track numbers; a movie that has fewer tracks than that is left alone). others: "delete", "silent" or "short" (see pmfkit.tracks).
+    The picture and everything else on the disc stay as they are. files: [(path inside the disc, bytes)] small files to replace
+    (a picture), each no bigger than the file is now. -> list of shrink.ShrinkResult"""
+    import shutil
+    import tempfile
+    from . import shrink as sh
+    from . import tracks as tk
+    from .cli import PROGRESS, BuildError, check_cancel
+    if os.path.normcase(os.path.abspath(src)) == os.path.normcase(os.path.abspath(out)):
+        raise BuildError("Save the new game under another name. PMF Studio never replaces your original.")
+    img = Image(src)
+    work = tempfile.mkdtemp(prefix="pmftracks_")
+    try:
+        try:
+            entries = walk(img)
+            movies = find_movies(entries)
+        except ValueError as e:
+            raise BuildError(str(e))
+        by_path = {e.path.upper(): e for e in entries}
+        extra = []
+        for path, data in files or []:
+            ent = by_path.get(path.upper())
+            if ent is None:
+                raise BuildError("There is no %s on that disc." % path)
+            extra.append((ent, data))
+        results, replacements, done = [], [], {}
+        for i, m in enumerate(movies):
+            check_cancel()
+            PROGRESS.window(0.85 * i / len(movies), 0.85 * (i + 1) / len(movies))
+            PROGRESS.report(0.0, "Movie %d of %d: %s" % (i + 1, len(movies), os.path.basename(m.name)))
+            raw = m.raw(img)
+            key = hashlib.sha256(raw).hexdigest()
+            if key in done:
+                lead = done[key]
+                if lead is not None:
+                    replacements.append(Replacement(m, lead[0], lead[1]))
+                    results.append(sh.ShrinkResult(m.name, m.name, m.size, lead[1], "same movie as an earlier one"))
+                else:
+                    results.append(sh.ShrinkResult(m.name, m.name, m.size, m.size, "left as it is"))
+                continue
+            try:
+                n_tracks = len(tk.read_tracks(raw))
+            except (ValueError, KeyError):
+                n_tracks = 0
+            if n_tracks < 2 or any(k >= n_tracks for k in keep):
+                done[key] = None
+                results.append(sh.ShrinkResult(m.name, m.name, m.size, m.size, "no sound tracks to choose from"))
+                continue
+            p_out = os.path.join(work, "m%d.new.pmf" % i)
+            try:
+                new = tk.retrack(raw, keep, others, ffmpeg, atracdenc, work, short_frames)
+            except (ValueError, BuildError, OSError) as e:
+                log("%s: %s" % (os.path.basename(m.name), e))
+                done[key] = None
+                results.append(sh.ShrinkResult(m.name, m.name, m.size, m.size, "failed: %s" % e))
+                continue
+            if len(new) >= m.size:
+                done[key] = None
+                results.append(sh.ShrinkResult(m.name, m.name, m.size, m.size, "would not get smaller"))
+                continue
+            with open(p_out, "wb") as f:
+                f.write(new)
+            replacements.append(Replacement(m, p_out, len(new)))
+            done[key] = (p_out, len(new))
+            log("%s: %s -> %s KB (%d tracks, %s)" % (os.path.basename(m.name), m.size // 1000, len(new) // 1000, n_tracks, others))
+            results.append(sh.ShrinkResult(m.name, m.name, m.size, len(new), "%d sound tracks, others %s" % (n_tracks, others)))
+        if not replacements:
+            raise BuildError("None of the movies has several sound tracks, so no new game was written.")
+        PROGRESS.window(0.85, 0.97)
+        PROGRESS.report(0.0, "Writing the new game…")
+        total_bytes = img.size
+        blocks = _blocks(img, replacements, check_cancel, None, extra)
+        tmp = out + ".part"
+        try:
+            if out.lower().endswith(".iso"):
+                with open(tmp, "wb") as f:
+                    for n, sec in enumerate(blocks):
+                        f.write(sec)
+                        if n % 8192 == 0:
+                            PROGRESS.report(n / img.sectors)
+                    f.truncate(total_bytes)
+                os.replace(tmp, out)
+                new_size = os.path.getsize(out)
+            else:
+                new_size = write_cso(blocks, img.sectors, total_bytes, out, level, progress=lambda f: PROGRESS.report(f))
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        if verify:
+            PROGRESS.window(0.97, 1.0)
+            PROGRESS.report(0.0, "Checking the new game…")
+            problem = _verify(img, out, replacements, check_cancel, None, extra)
+            if problem:
+                try:
+                    os.remove(out)
+                except OSError:
+                    pass
+                raise BuildError("The new game did not pass the check (%s), so it was not kept." % problem)
+        PROGRESS.report(1.0)
+        results.append(sh.ShrinkResult(src, out, os.path.getsize(src), new_size, "game image"))
+        return results
+    finally:
+        img.close()
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _verify(old, out_path, replacements, check, removal=None, files=None):
     """None when the new image is the old one with exactly the replaced movies changed (and the UPDATE folder emptied, if that was planned):
     same files at the same places, replaced movies equal to the smaller ones and sized right, every other sector equal to the old one"""
     new = Image(out_path)
@@ -407,13 +532,18 @@ def _verify(old, out_path, replacements, check, removal=None):
         for rp in replacements:
             for e in rp.movie.entries:
                 changed[(e.path, e.extent)] = rp.new_size
+        for ent, data in files or []:
+            changed[(ent.path, ent.extent)] = len(data)
         for k, size in b.items():
             if size != changed.get(k, a[k]):
                 return "the size of %s is wrong" % k[0]
         patched = {e.rec_sector for rp in replacements for e in rp.movie.entries}
+        patched |= {ent.rec_sector for ent, _ in files or []}
         skip = set()
         for rp in replacements:
             skip.update(range(rp.movie.extent, rp.movie.extent + rp.movie.sectors))
+        for ent, _ in files or []:
+            skip.update(range(ent.extent, ent.extent + -(-ent.size // SECTOR)))
         skip |= patched
         if removal:
             skip |= removal.touched
@@ -438,6 +568,10 @@ def _verify(old, out_path, replacements, check, removal=None):
                 wanted = f.read()
             if data[:rp.new_size] != wanted or any(data[rp.new_size:]):
                 return "a replaced movie (%s) is not what was written" % os.path.basename(rp.movie.name)
+        for ent, wanted in files or []:
+            data = new.read(ent.extent, -(-ent.size // SECTOR))
+            if data[:len(wanted)] != wanted or any(data[len(wanted):]):
+                return "a replaced file (%s) is not what was written" % os.path.basename(ent.path)
         return None
     finally:
         new.close()
