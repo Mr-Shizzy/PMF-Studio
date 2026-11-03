@@ -126,8 +126,8 @@ class ShrinkMovieTests(unittest.TestCase):
 
     def test_mirror_mode_copies_buffer_numbers_and_the_entry_point_map(self):
         from pmfkit import atrac3p, mirror
-        from pmfkit.demux import demux_all
-        from pmfkit.mux import mux, hint_from_size
+        from pmfkit.demux import demux_all, header_size
+        from pmfkit.mux import mux, hint_from_size, entry_flags
         with tempfile.TemporaryDirectory() as d:
             _, v, a, _ = demux(open(self.pmf, "rb").read())
             # the original: a game-style movie with a 129 KiB buffer and an entry-point map
@@ -150,7 +150,9 @@ class ShrinkMovieTests(unittest.TestCase):
                 self.assertIn(0xBB, [it.sid for it in items])
                 first = next(it for it in items if it.sid == 0xE0)
                 self.assertEqual(first.pts, pts)
-                self.assertEqual(hint >> 12, 0xC)
+                at = raw.find(b"\x00\x00\x01\xbf", header_size(raw) + pack * 2048)       # the entry follows the slots of the index in its pack
+                slots = [int.from_bytes(raw[at + 8 + 2 * k:at + 10 + 2 * k], "big") for k in range(4)]
+                self.assertEqual(hint, entry_flags(slots))
 
     def test_survey_and_prediction(self):
         info = shrink.survey(self.pmf)

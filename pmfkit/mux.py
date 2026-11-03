@@ -94,15 +94,27 @@ def pes(sid, flags2, fields, payload, room):
     return b"\x00\x00\x01" + bytes([sid]) + len(body).to_bytes(2, "big") + body + pad
 
 
-def gop_index(sizes, pack_idx, last_flag=0, flags=None):
+def index_flags(npics, last_flag=0, flags=None):
+    """The flag of every picture in a GOP index: 0x80 = reference picture (a picture nobody references has 0)."""
+    return list(flags) if flags is not None else [0x0080] * (npics - 1) + [last_flag]
+
+
+def reference_pictures(flags):
+    """The first four reference pictures of a GOP (positions in decode order): the pictures whose last pack the GOP index lists."""
+    return [i for i, f in enumerate(flags) if f & 0x80 or i == 0][:4]      # the GOP's first picture is an IDR picture, always a reference
+
+
+def gop_index(sizes, slots, last_flag=0, flags=None):
+    """The private-stream-2 payload at the start of a GOP. `slots` = for the first (up to four) reference pictures, the pack where the picture ends,
+    counted from the GOP's first pack; a missing slot is 0xFFFF. Per picture: 4 bytes = the flag byte(s) and the size (21 bits; the top 5 sit in
+    the flag's low bits). Read from Sony's MpsMux.dll and checked on retail movies (notes 130, 131)."""
     n = len(sizes)
-    first4 = pack_idx[:4]
-    first4 = first4 + [first4[-1]] * (4 - len(first4))
+    flags = index_flags(n, last_flag, flags)
+    first4 = list(slots[:4]) + [0xFFFF] * (4 - len(slots[:4]))
     b = b"\x01\xe0" + b"".join(i.to_bytes(2, "big") for i in first4) + b"\x00\x00\x00\x00"
     b += (2 + 4 * n).to_bytes(2, "big") + n.to_bytes(2, "big")
-    for i, s in enumerate(sizes):
-        flag = flags[i] if flags is not None else (0x0080 if i < n - 1 else last_flag)    # B-frame streams: 0x80 = reference picture
-        b += flag.to_bytes(2, "big") + s.to_bytes(2, "big")
+    for flag, s in zip(flags, sizes):
+        b += (flag | (s >> 16)).to_bytes(2, "big") + (s & 0xFFFF).to_bytes(2, "big")
     return b
 
 
@@ -346,11 +358,9 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
         body = e.body
         if e.kind == "v" and e.gop_start:
             a0, a1, mine, ends = gops[e.gop]
-            idx = []
-            for end in ends[:4]:
-                t = next(m for m in mine if m.cum_end >= end)
-                idx.append(pos_of[id(t)] - p)
-            bf = gop_index([len(a.data) for a in aus[a0:a1]], idx, index_last_flag, None if ref_flags is None else ref_flags[a0:a1])
+            gflags = index_flags(a1 - a0, index_last_flag, None if ref_flags is None else ref_flags[a0:a1])
+            idx = _slots(pos_of, mine, ends, gflags)
+            bf = gop_index([len(a.data) for a in aus[a0:a1]], idx, index_last_flag, gflags)
             assert len(bf) == gop_index_len(a1 - a0)
             body = sysh + b"\x00\x00\x01\xbf" + len(bf).to_bytes(2, "big") + bf + body
         bodies.append(body)
@@ -362,7 +372,8 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
         stream += pk
     entries = ()
     if entry_hint is not None:                                       # one entry per GOP: the IDR's time stamp and the pack it starts in
-        entries = tuple((_entry_flags(pos_of, mine, ends), FIRST_PTS + FRAME * (disp[a0] if disp else a0), pos_of[id(mine[0])])
+        entries = tuple((entry_flags(_slots(pos_of, mine, ends, index_flags(a1 - a0, index_last_flag, None if ref_flags is None else ref_flags[a0:a1]))),
+                         FIRST_PTS + FRAME * (disp[a0] if disp else a0), pos_of[id(mine[0])])
                         for a0, a1, mine, ends in gops)
     hdr = psmf.build_header(psmf.Params(
         stream_bytes=len(stream), last_pts=FIRST_PTS + FRAME * len(aus), width=width, height=height,
@@ -371,20 +382,27 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
     return hdr + bytes(stream)
 
 
-def _entry_flags(pos_of, mine, ends):
-    """The first two bytes of an entry-point entry (PPSSPP: EPIndex and EPPicOffset). The first is 0xC0 in almost every entry of the retail movies
-    (44 of 1,650 in LocoRoco 2's B-frame movies are 0x80, 0x40 or 0x00, and those 44 do not follow the rule below either: meaning not known, they
-    are written as 0xC0 like the rest). The second is twice the 4th number of the GOP's own index (the pack, counted from the GOP's first pack,
-    where its first four pictures end): it held for all 4,722 entries of Gun Showdown, LocoRoco 2 and 007 From Russia With Love that have the
-    first byte 0xC0."""
+def _slots(pos_of, mine, ends, flags):
+    """For the first four reference pictures of a GOP: the pack (counted from the GOP's first pack) where the picture ends."""
     p = pos_of[id(mine[0])]
-    rel = [pos_of[id(next(m for m in mine if m.cum_end >= end))] - p for end in ends[:4]]
-    rel += [rel[-1]] * (4 - len(rel))
-    return 0xC000 | min(0xFF, 2 * rel[3])
+    cum = [m.cum_end for m in mine]
+    return [pos_of[id(mine[bisect.bisect_left(cum, ends[i])])] - p for i in reference_pictures(flags)]
+
+
+def entry_flags(slots):
+    """The first two bytes of an entry-point entry (EPIndex and EPPicOffset, as PPSSPP names them) from the GOP index's four slots: the LAST slot that
+    is not 0xFFFF gives its number (1-4, written as number - 1 in the top two bits) and its value (11 bits, half of it in the first byte and the
+    rest, doubled, in the second); none -> number 1, value 2047. This is the rule of Sony's own clip-info writer (found by Codex in
+    ClipInfoComposer, notes 131) and it matches all 3,946 entries of Gun Showdown, LocoRoco 2 (the 44 odd ones too) and 007 From Russia With Love."""
+    number, value = 1, 2047
+    for i, v in enumerate(list(slots[:4]) + [0xFFFF] * (4 - len(slots[:4]))):
+        if v != 0xFFFF:
+            number, value = i + 1, v
+    return (((number - 1) << 14) | (((value >> 7) & 0x0F) << 8)) | ((value & 0x7F) << 1)
 
 
 def hint_from_size(first_bytes, top=0xC000):
-    """OLD GUESS, no longer used by mux (see _entry_flags for the exact rule): the u16 of an entry-point map entry as 0xC000 plus an even number
+    """OLD GUESS, no longer used by mux (see entry_flags for the exact rule): the u16 of an entry-point map entry as 0xC000 plus an even number
     that follows the amount of data in the first pictures of the GOP."""
     if first_bytes < 1000:
         return top
@@ -508,7 +526,8 @@ def mux_file(es_path, out_path, audio=None, version="0012", style="B", width=480
                 packs += 1
                 if unresolved is None and e.kind == "v" and e.gop_start:
                     mine_now = next_video.mine
-                    unresolved = (e, mine_now, ends_of, sizes_of, [next(m for m in mine_now if m.cum_end >= end) for end in ends_of[:4]])
+                    refs = reference_pictures(index_flags(len(sizes_of), index_last_flag))
+                    unresolved = (e, mine_now, ends_of, sizes_of, [next(m for m in mine_now if m.cum_end >= ends_of[i]) for i in refs])
                 if unresolved is not None:
                     pending.append((scr, e))
                     if all(m.pos is not None for m in unresolved[4]):

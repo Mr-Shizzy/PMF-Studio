@@ -15,7 +15,7 @@ import build_umd_iso  # noqa: E402
 
 from pmfkit import atrac3p, cli, tracks, umdimage  # noqa: E402
 from pmfkit.demux import demux_all  # noqa: E402
-from pmfkit.mux import mux  # noqa: E402
+from pmfkit.mux import mux, entry_flags, gop_index, reference_pictures  # noqa: E402
 from tests.test_umdimage import make_game, simple_files  # noqa: E402
 
 FFMPEG = shutil.which("ffmpeg")
@@ -305,8 +305,29 @@ class EntryFlagTests(unittest.TestCase):
             pack = raw[hs + pack_no * SECTOR: hs + (pack_no + 1) * SECTOR]
             i = pack.find(b"\x00\x00\x01\xbf")
             body = pack[i + 6:i + 6 + int.from_bytes(pack[i + 4:i + 6], "big")]
-            fourth = int.from_bytes(body[8:10], "big")
-            self.assertEqual(hint, 0xC000 | 2 * fourth)
+            slots = [int.from_bytes(body[2 + 2 * k:4 + 2 * k], "big") for k in range(4)]
+            self.assertEqual(hint, entry_flags(slots))
+
+    def test_the_entry_rule_of_sonys_clip_info_writer(self):
+        self.assertEqual(entry_flags([4, 6, 7, 8]), 0xC000 | 2 * 8)                # four slots: number 4, value 8
+        self.assertEqual(entry_flags([3, 3, 0xFFFF, 0xFFFF]), 0x4000 | 2 * 3)      # two slots: number 2 (stored 1)
+        self.assertEqual(entry_flags([7, 0xFFFF, 0xFFFF, 0xFFFF]), 0x0000 | 2 * 7)
+        self.assertEqual(entry_flags([5, 9, 12]), 0x8000 | 2 * 12)                # three slots, the 4th not filled
+        self.assertEqual(entry_flags([0xFFFF] * 4), 0x0000 | ((2047 >> 7) << 8) | ((2047 & 0x7F) << 1))
+        self.assertEqual(entry_flags([200, 0xFFFF, 0xFFFF, 0xFFFF]) >> 8, 0x00 | (200 >> 7))   # a value over 127 spills into the first byte
+
+    def test_the_gop_index_marks_missing_slots_and_keeps_21_bit_sizes(self):
+        flags = [0x80, 0x80, 0, 0x80, 0x80, 0x80]
+        sizes = [70000, 1000, 500, 800, 900, 100]
+        bf = gop_index(sizes, [0, 1, 3, 4], 0, flags)
+        self.assertEqual(bf[:2], b"\x01\xe0")
+        self.assertEqual([int.from_bytes(bf[2 + 2 * k:4 + 2 * k], "big") for k in range(4)], [0, 1, 3, 4])
+        self.assertEqual(reference_pictures(flags), [0, 1, 3, 4])                    # the B-frame (flag 0) is not a slot
+        short = gop_index([100, 200], [2], 0, None)
+        self.assertEqual([int.from_bytes(short[2 + 2 * k:4 + 2 * k], "big") for k in range(4)], [2, 0xFFFF, 0xFFFF, 0xFFFF])
+        rec = bf[18:22]
+        self.assertEqual(int.from_bytes(rec[:2], "big") & 0xFF80, 0x80)
+        self.assertEqual(((int.from_bytes(rec[:2], "big") & 0x1F) << 16) | int.from_bytes(rec[2:], "big"), 70000)
 
 
 class GameFileNameTests(unittest.TestCase):
