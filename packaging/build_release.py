@@ -160,6 +160,8 @@ def selftest():
 
 
 PERSONAL_MAIL = re.compile(rb"[A-Za-z0-9._%+-]+@(?:gmail|googlemail|outlook|hotmail|live|yahoo|icloud|proton|protonmail)\.[a-z]{2,}", re.I)
+# public author lines in Python's own io module (CPython source), carried inside python312.dll and base_library.zip
+KNOWN_MAIL = {b"mike.verdone@gmail.com", b"amauryfa@gmail.com"}
 
 
 def scan_personal():
@@ -177,6 +179,8 @@ def scan_personal():
                 if w.lower() in low:
                     bad.append((os.path.relpath(p, FOLDER), w.decode(), low.count(w.lower())))
             for m in set(PERSONAL_MAIL.findall(data)):
+                if m.lower() in KNOWN_MAIL:
+                    continue
                 bad.append((os.path.relpath(p, FOLDER), "a personal e-mail address (%s...)" % m[:3].decode("latin1"), data.count(m)))
     return bad
 
