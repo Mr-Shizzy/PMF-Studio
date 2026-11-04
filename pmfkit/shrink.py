@@ -216,7 +216,7 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
     refs = idr_frames = None
     if mir is not None:
         bframes, refs, idr_frames = mir.bframes, (max(2, mir.refs) if mir.bframes else mir.refs), mir.idr_frames
-        container.update(style=mir.style, video_kib=mir.video_kib or None, header_kib=mir.header_kib or None)
+        container.update(style=mir.style, video_kib=mir.video_kib or None, header_kib=mir.header_kib or None, audio_kib=mir.audio_kib or None)
     elif bframes is None:
         bframes = 1
     work = tempfile.mkdtemp(prefix="pmfshrink_")

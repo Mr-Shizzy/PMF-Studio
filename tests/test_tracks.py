@@ -308,6 +308,16 @@ class EntryFlagTests(unittest.TestCase):
             slots = [int.from_bytes(body[2 + 2 * k:4 + 2 * k], "big") for k in range(4)]
             self.assertEqual(hint, entry_flags(slots))
 
+    def test_the_audio_bound_of_the_system_header_is_kept(self):
+        from pmfkit import mirror
+        from pmfkit.mux import system_header
+        self.assertTrue(system_header("B", 251).endswith(b"\xbd\xe0\x08"))
+        self.assertTrue(system_header("B", 251, 776).endswith(b"\xbd\xe3\x08"))               # version 0015 movies: 776 KiB
+        t = TrackTests
+        for audio_kib, want in ((None, 8), (776, 776)):
+            raw = mux(t.video, t.streams[0], version="0015", style="B", header_kib=251, video_kib=251, audio_kib=audio_kib, strict=False)
+            self.assertEqual(mirror.read(raw).audio_kib, want)
+
     def test_the_entry_rule_of_sonys_clip_info_writer(self):
         self.assertEqual(entry_flags([4, 6, 7, 8]), 0xC000 | 2 * 8)                # four slots: number 4, value 8
         self.assertEqual(entry_flags([3, 3, 0xFFFF, 0xFFFF]), 0x4000 | 2 * 3)      # two slots: number 2 (stored 1)

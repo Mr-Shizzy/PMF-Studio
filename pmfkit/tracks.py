@@ -70,7 +70,7 @@ def retrack(raw, keep, others, ffmpeg=None, atracdenc=None, work=None, short_fra
     version = params.version if params.version in ("0012", "0013", "0014", "0015") else "0012"
     container = dict(version=version, style="A" if params.video_buffer_kib >= 400 else "B", width=params.width, height=params.height)
     if mir.known:
-        container.update(style=mir.style, video_kib=mir.video_kib or None, header_kib=mir.header_kib or None)
+        container.update(style=mir.style, video_kib=mir.video_kib or None, header_kib=mir.header_kib or None, audio_kib=mir.audio_kib or None)
     entry_hint = mirror.entry_hint_for(mir, True) if mir.known and mir.has_map else None
     return mux(video, sound, allow_b=True, strict=False, entry_hint=entry_hint, **container)
 

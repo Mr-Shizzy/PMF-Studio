@@ -19,6 +19,7 @@ class Source:
     style: str = "B"                       # stream style (see mux.PROFILES), read from the system header's flag byte
     video_kib: int = 0                     # the video buffer in the system header (0 = unknown)
     header_kib: int = 0                    # the video buffer in the PSMF header
+    audio_kib: int = 0                     # the audio (BD) buffer bound in the system header (0 = unknown; 8 in version 0014 movies, 776 in 0015)
     refs: int = 1
     bframes: int = 0                       # 0 = the movie has no B-frames (picture order count type 2), 1 = it has (type 0)
     idr_frames: list = field(default_factory=list)     # picture numbers (decode order) of the pictures that start a GOP
@@ -35,6 +36,8 @@ def read(raw):
     if len(sysh) >= 9:
         src.style = "B" if sysh[3] == 0x80 else "A"
         src.video_kib = int.from_bytes(sysh[7:9], "big") & 0x1FFF
+    if len(sysh) >= 12 and sysh[9] == 0xBD:
+        src.audio_kib = int.from_bytes(sysh[10:12], "big") & 0x1FFF
     try:
         sps, _ = stream_info(video)
         aus = split_access_units(video)

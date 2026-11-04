@@ -72,11 +72,13 @@ def pack_header(scr27):
     return b"\x00\x00\x01\xba" + bytes(b) + rate.to_bytes(3, "big") + b"\xf8"
 
 
-def system_header(style, video_kib):
+def system_header(style, video_kib, audio_kib=None):
+    """audio_kib: the BD (audio) buffer bound; default the style's own (8). Movies of version 0015 (Hammerin Hero, Ice Road Truckers, Hot Shots
+    Shorties) carry 776 there."""
     prof = PROFILES[style]
     return (b"\x00\x00\x01\xbb\x00\x0c\x80\xc3\x51" + bytes([prof["sys_flag"]]) + b"\xf0\x7f"
             + b"\xb9" + (0xE000 | video_kib).to_bytes(2, "big")
-            + b"\xbd" + (0xE000 | prof["sys_audio_kib"]).to_bytes(2, "big"))
+            + b"\xbd" + (0xE000 | (audio_kib or prof["sys_audio_kib"])).to_bytes(2, "big"))
 
 
 def pes(sid, flags2, fields, payload, room):
@@ -127,7 +129,7 @@ class _Entry:
     __slots__ = ("kind", "body", "floor", "gop", "cum_end", "gop_start", "pos")
 
 
-def _layout_video(aus, style, video_kib, video_lead=VIDEO_LEAD, disp=None):
+def _layout_video(aus, style, video_kib, video_lead=VIDEO_LEAD, disp=None, audio_kib=None):
     """Split the access units into video packs. Independent of audio.
     disp = display position of every access unit (given in decode order); default = same order, i.e. no B-frames.
     DTS = decode position - shift (frames), PTS = display position; a PES stamp carries only the PTS when the two are equal."""
@@ -141,7 +143,7 @@ def _layout_video(aus, style, video_kib, video_lead=VIDEO_LEAD, disp=None):
     def dts(k):
         return FIRST_PTS + FRAME * (k - shift)
 
-    sysh = system_header(style, video_kib)
+    sysh = system_header(style, video_kib, audio_kib)
     vext = b"\x1e" + (0x6000 | video_kib).to_bytes(2, "big")
     idr = [i for i, a in enumerate(aus) if a.gop_start] + [len(aus)]
     entries, gops = [], []
@@ -288,12 +290,12 @@ class _AudioFeeder:
 
 def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, header_kib=None, strict=True,
         index_last_flag=0, video_lead=VIDEO_LEAD, audio_pts_base=AUDIO_PTS_BASE, audio2_floor=AUDIO2_FLOOR, allow_b=False,
-        video_kib=None, entry_hint=None):
+        video_kib=None, entry_hint=None, audio_kib=None):
     """video_es: Annex B H.264 (AUD, SPS/PPS on every IDR). No B-frames unless allow_b=True (picture order count type 0,
     2 reference frames, as in LocoRoco 2; untested for our own output on hardware). audio: Atrac3pStream or None. -> PMF bytes.
     version = PSMF header version ("0012" gameboot-safe); style = stream style "A"/"B" (see PROFILES).
     video_kib: the video buffer written into the system headers and the PES extensions (default: the style's own number; a game's own
-    movies say 129, 251 or 495). entry_hint: a function (PTS of the IDR, bytes of its first three pictures) -> the u16 hint of an entry-point
+    movies say 129, 251 or 495). audio_kib: the audio bound in the system headers (default 8; version 0015 movies say 776). entry_hint: a function (PTS of the IDR, bytes of its first three pictures) -> the u16 hint of an entry-point
     map entry; when given, the header gets a map with one entry per GOP (what the game's own movies carry)."""
     if style not in PROFILES:
         raise ValueError("unknown stream style %r (use A or B)" % style)
@@ -320,7 +322,7 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
         sps, _ = stream_info(video_es)
         disp = display_indices(aus, sps)
         ref_flags = reference_flags(aus)
-    ventries, gops, sysh = _layout_video(aus, style, video_kib, video_lead, disp)
+    ventries, gops, sysh = _layout_video(aus, style, video_kib, video_lead, disp, audio_kib)
 
     # ---- merge video and audio packs, assigning SCR as we go (audio wins ties: it is "due")
     feeder = _AudioFeeder(audio, style, audio_pts_base, audio2_floor) if audio is not None else None
