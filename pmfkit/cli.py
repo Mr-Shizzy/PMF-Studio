@@ -18,7 +18,7 @@ from .fit import pick_audio_kbps
 from .toolinfo import ascii_temp_dir, is_ascii
 from .gameboot import STOCK_SECONDS, BUDGET_BYTES, VERIFIED_OK_BYTES, VERIFIED_FAIL_BYTES, movie_ms
 from .snd0 import COMBINED_LIMIT
-from .mux import mux, mux_file, ICON1,ICON1_GOP, ICON1_VIDEO_KBPS, ICON1_AUDIO_KBPS, ICON1_MAX_BYTES, ICON1_VERIFIED_OK, ICON1_VERIFIED_FAIL
+from .mux import mux, mux_file, MAX_PICTURE, ICON1,ICON1_GOP, ICON1_VIDEO_KBPS, ICON1_AUDIO_KBPS, ICON1_MAX_BYTES, ICON1_VERIFIED_OK, ICON1_VERIFIED_FAIL
 
 # Sony-composer gameboots use 1 reference frame and no weighted prediction; PPSSPP plays anything, the PSP hardware decoder is stricter
 X264_PARAMS = "aud=1:nal-hrd=vbr:pic-struct=1:force-cfr=1:scenecut=0:repeat-headers=1"
@@ -283,9 +283,9 @@ def _make_pmf(a, work):
         except ValueError as e:
             if "picture is larger" not in str(e):
                 raise
-            # a picture over 65,535 bytes cannot be indexed: shrink the VBV buffer so the encoder caps picture sizes
+            # a picture over the proven size (mux.MAX_PICTURE) is refused: shrink the VBV buffer so the encoder caps picture sizes
             bufsize = int((bufsize or video_kbps * 1.5) * 0.6)
-            print("a picture is over 65,535 bytes; retrying with a %d kbit VBV buffer" % bufsize)
+            print("a picture is over %d bytes; retrying with a %d kbit VBV buffer" % (MAX_PICTURE, bufsize))
             continue
         if limit is None:
             best = pmf
@@ -311,7 +311,7 @@ def _make_pmf(a, work):
             break
         video_kbps = new_kbps
     if best is None:
-        fail("could not make the movie fit its size limit; use a shorter part" if limit else "could not keep every picture under 65,535 bytes; lower --video-kbps")
+        fail("could not make the movie fit its size limit; use a shorter part" if limit else "could not keep every picture under %d bytes; lower --video-kbps" % MAX_PICTURE)
     PROGRESS.report(1.0, "Movie ready")
     return best
 

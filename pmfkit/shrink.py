@@ -262,7 +262,7 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
             except ValueError as e:
                 if "picture is larger" not in str(e):
                     raise
-                bufsize = int(bufsize * 0.6)             # a picture over 65,535 bytes can't be indexed: a smaller buffer caps picture sizes
+                bufsize = int(bufsize * 0.6)             # a picture over mux.MAX_PICTURE is refused: a smaller buffer caps picture sizes
                 continue
             # the picture is asked to keep `ratio` of its size; the sound (all tracks) and the container stay as they are, or as the new sound is
             fixed = before - len(video) - sum(len(t) for t in tracks.values()) + _sound_bytes(sound)

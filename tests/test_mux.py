@@ -74,3 +74,48 @@ class SelfConsistency(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PictureSizeLimit(unittest.TestCase):
+    """The muxer refuses a picture over mux.MAX_PICTURE (95,545 bytes: the largest picture seen in a retail movie that plays) and accepts one at the limit."""
+
+    def test_limit_is_a_named_bound_and_applies(self):
+        from pmfkit import mux as mux_module
+        from pmfkit.h264 import split_access_units
+        f = os.path.join(PACK, SAMPLES[0])
+        if not os.path.exists(f):
+            self.skipTest("oracle PMFs not present")
+        params, v, a, packs = demux(open(f, "rb").read())
+        biggest = max(len(x.data) for x in split_access_units(v))
+        self.assertGreater(mux_module.MAX_PICTURE, 0xFFFF)               # no longer the old 16-bit refusal
+        old = mux_module.MAX_PICTURE
+        try:
+            mux_module.MAX_PICTURE = biggest                              # exactly at the limit: accepted
+            mux(v, atrac3p.from_units(a), version=params.version, style=style_of(packs), header_kib=params.video_buffer_kib)
+            mux_module.MAX_PICTURE = biggest - 1                          # one byte over: refused
+            with self.assertRaises(ValueError) as cm:
+                mux(v, atrac3p.from_units(a), version=params.version, style=style_of(packs), header_kib=params.video_buffer_kib)
+            self.assertIn("picture is larger", str(cm.exception))
+        finally:
+            mux_module.MAX_PICTURE = old
+
+
+class PackClockMatchesSony(unittest.TestCase):
+    """Sony's muxer sends packs only on its pack clock (start 3,044,236.8, step 44,236.8 ticks of 27 MHz) and admits a picture or audio unit one second
+    (STD_delay 90000) before it is due. Re-muxing real gameboots must give the original's clock value on every pack."""
+
+    def test_every_pack_has_the_original_clock_value(self):
+        from pmfkit.demux import demux_all
+        from pmfkit.mirror import read as mirror_read
+        f = os.path.join(PACK, "ATARI/gameboot.pmf")
+        if not os.path.exists(f):
+            self.skipTest("oracle PMFs not present")
+        raw = open(f, "rb").read()
+        params, v, tr, packs = demux_all(raw)
+        mir = mirror_read(raw)
+        new = mux(v, atrac3p.from_units(tr[sorted(tr)[0]]), version=params.version, style=mir.style, width=params.width, height=params.height,
+                  video_kib=mir.video_kib or None, header_kib=mir.header_kib or None, audio_kib=mir.audio_kib or None)
+        packs2 = demux_all(new)[3]
+        self.assertEqual(len(packs2), len(packs))
+        off = [k for k, (a, b) in enumerate(zip(packs, packs2)) if abs(a.scr27 - b.scr27) > 1]
+        self.assertEqual(off, [])

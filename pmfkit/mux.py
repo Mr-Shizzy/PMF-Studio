@@ -20,13 +20,17 @@ from .sps import psp_problems, stream_info
 PACK = 2048
 FRAME = 3003
 FIRST_PTS = 90000
-SCR_START = 3044236
+SCR_START = Fraction(30442368, 10)                         # 3,044,236.8 = 3,000,000 + one step; the written value is the floor (Sony files: 3044236, 3088473, 3132710 ...)
 SCR_STEP = Fraction(2048 * 27000000, 25000 * 50)          # 44236.8 ticks of 27 MHz per pack
-VIDEO_LEAD = 89925          # fitted on Sony PMFs: SCR >= DTS(AU after the pack) - 89925
+VIDEO_LEAD = 90000          # fitted on Sony PMFs: SCR >= DTS(AU after the pack) - 89925
 MIN_VIDEO_LEAD = 35000      # a picture's first byte is never sent later than DTS - this (Sony movies: smallest lead seen 35,814)
 AUDIO_BUF = 4096            # audio P-STD buffer
-AUDIO2_FLOOR = 16046        # Sony files send the 2nd audio pack at SCR 16046 (90 kHz) regardless of content
+AUDIO_LOOKAHEAD = 90000     # STD_delay Composer writes (90 kHz ticks)
+AUDIO2_FLOOR = 16046        # the old fitted constant for the 2nd audio pack's time (90 kHz); no longer used: pass audio2_floor=AUDIO2_FLOOR to get it back (the formula in _AudioFeeder.next_floor is the default)
 STAMP_EVERY = 16
+# Largest single picture allowed. The GOP index has a 21-bit size field and the stream's video buffer is 251 KiB (495 KiB in version 0012), so the
+# real ceiling is far higher; 95,545 bytes is the largest picture seen in a retail movie that plays on a PSP (Coded Arms sector00.pmf), so it is the proven bound.
+MAX_PICTURE = 95545
 MAX_AUDIO_UNIT = PACK - 14 - 9 - 5 - 4        # an audio unit (8-byte header + frame) must fit in one pack
 AUDIO_PTS_BASE = Fraction(8506956, 100)                     # first audio unit PTS (fitted: matches Sony to +-1 tick)
 AUDIO_UNIT_TICKS = Fraction(2048 * 90000, 44100)            # one ATRAC3plus frame in 90 kHz ticks
@@ -53,6 +57,13 @@ PROFILES = {
     "B": dict(sys_flag=0x80, sys_audio_kib=8, audio_ext=b"\x1e\x60\x04", video_kib=251),
 }
 HEADER_KIB = {"0012": 495, "0014": 251}                     # P-STD value Sony/MPStoPMF headers carry per version
+
+
+def _on_clock(t, earliest):
+    """the first pack time at or after `earliest` on the pack clock that starts at t (Sony's muxer only sends packs on its clock grid)"""
+    if earliest <= t:
+        return t
+    return t + -((t - earliest) // SCR_STEP) * SCR_STEP
 
 
 def ts(prefix, v):
@@ -206,7 +217,7 @@ def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead):
 
 
 class _AudioFeeder:
-    def __init__(self, audio, style, pts_base=AUDIO_PTS_BASE, second_floor=AUDIO2_FLOOR):
+    def __init__(self, audio, style, pts_base=AUDIO_PTS_BASE, second_floor=None):
         """audio: one Atrac3pStream, or a list of them for a movie with several sound tracks (languages). Retail files (007 From Russia With
         Love) send each audio pack once per track, one after the other with the same time stamp, the track number as first byte of the
         payload: tracks of the same frame size and length are sent that way. A track of another frame size or length (a silent stand-in
@@ -235,8 +246,13 @@ class _AudioFeeder:
         if self.g >= len(self.es):
             return None
         if self.count == 1:
-            return self.second_floor
-        need = self.g + PACK - 14 - 9 - 5 - 4 - AUDIO_BUF
+            if self.second_floor is not None:
+                return self.second_floor
+            # Sony's muxer admits an access unit when its time stamp lies within STD_delay (90000 = 1 s) of the clock: the second audio pack
+            # (2016 media bytes after the first pack's 2013) is available that long before the last audio unit it touches is due
+            last = min(self.g + PACK - 14 - 9 - 5 - 4, len(self.es)) - 1
+            return int(self.pts_base + (last // self.U) * AUDIO_UNIT_TICKS) - AUDIO_LOOKAHEAD
+        need = self.g + min(PACK - 14 - 9 - 5 - 4, len(self.es) - self.g) - AUDIO_BUF      # the last pack only holds what is left
         if need <= 0:
             return None
         i = -(-need // self.U) - 1                      # last unit that must have been decoded
@@ -289,7 +305,7 @@ class _AudioFeeder:
 
 
 def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, header_kib=None, strict=True,
-        index_last_flag=0, video_lead=VIDEO_LEAD, audio_pts_base=AUDIO_PTS_BASE, audio2_floor=AUDIO2_FLOOR, allow_b=False,
+        index_last_flag=0, video_lead=VIDEO_LEAD, audio_pts_base=AUDIO_PTS_BASE, audio2_floor=None, allow_b=False,
         video_kib=None, entry_hint=None, audio_kib=None):
     """video_es: Annex B H.264 (AUD, SPS/PPS on every IDR). No B-frames unless allow_b=True (picture order count type 0,
     2 reference frames, as in LocoRoco 2; untested for our own output on hardware). audio: Atrac3pStream or None. -> PMF bytes.
@@ -315,8 +331,8 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
     video_kib = video_kib or PROFILES[style]["video_kib"]
     aus = split_access_units(video_es)
     for a in aus:
-        if len(a.data) > 0xFFFF:
-            raise ValueError("a picture is larger than 65535 bytes; lower the bitrate/quality")
+        if len(a.data) > MAX_PICTURE:
+            raise ValueError("a picture is larger than %d bytes; lower the bitrate/quality" % MAX_PICTURE)
     disp = ref_flags = None
     if allow_b:
         sps, _ = stream_info(video_es)
@@ -331,7 +347,7 @@ def mux(video_es, audio=None, version="0012", style="B", width=480, height=272, 
 
     def when(floor):
         t = SCR_START if cur is None else cur + SCR_STEP
-        return t if floor is None else max(t, Fraction(floor * 300))
+        return t if floor is None else _on_clock(t, Fraction(floor * 300))
 
     while vi < len(ventries) or (feeder and not feeder.done()):
         have_a = feeder is not None and not feeder.done()
@@ -426,7 +442,7 @@ def _gops_from(units):
 
 
 def mux_file(es_path, out_path, audio=None, version="0012", style="B", width=480, height=272, header_kib=None, strict=True,
-             index_last_flag=0, video_lead=VIDEO_LEAD, audio_pts_base=AUDIO_PTS_BASE, audio2_floor=AUDIO2_FLOOR):
+             index_last_flag=0, video_lead=VIDEO_LEAD, audio_pts_base=AUDIO_PTS_BASE, audio2_floor=None):
     """The same file mux() makes (no B-frames), but read from a file and written to a file a piece at a time: the memory used is one GOP
     and the sound, however long the movie is (mux() holds the picture data about six times over). -> the size written."""
     from .h264 import iter_access_units
@@ -456,8 +472,8 @@ def mux_file(es_path, out_path, audio=None, version="0012", style="B", width=480
 
     def counting(units):
         for au in units:
-            if len(au.data) > 0xFFFF:
-                raise ValueError("a picture is larger than 65535 bytes; lower the bitrate/quality")
+            if len(au.data) > MAX_PICTURE:
+                raise ValueError("a picture is larger than %d bytes; lower the bitrate/quality" % MAX_PICTURE)
             counted[0] += 1
             yield au
 
@@ -491,7 +507,7 @@ def mux_file(es_path, out_path, audio=None, version="0012", style="B", width=480
 
     def when(floor):
         t = SCR_START if cur is None else cur + SCR_STEP
-        return t if floor is None else max(t, Fraction(floor * 300))
+        return t if floor is None else _on_clock(t, Fraction(floor * 300))
 
     def resolve(out):
         nonlocal pending, unresolved
