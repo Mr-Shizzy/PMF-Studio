@@ -94,6 +94,19 @@ class TrackTests(unittest.TestCase):
             self.assertEqual(len(atrac3p.from_units(t[i]).frames), 1)
         self.assertLessEqual(len(out), len(tracks.retrack(self.three, [1], "delete")) + 4 * SECTOR)
 
+    def test_the_player_plays_the_track_that_has_sound(self):
+        """Shrink keeps one language and turns the others into one frame of silence; the Player used to open track 1 and fail with 'audio too short
+        for an SND0' when track 1 was one of the removed ones."""
+        import types
+        from pmfstudio import player
+        out = tracks.retrack(self.three, [2], "short", FFMPEG, ATRAC, self.work)
+        path = os.path.join(self.work, "kept_third.pmf")
+        open(path, "wb").write(out)
+        stub = types.SimpleNamespace(work=self.work, index_keyframes=lambda v: None)
+        player.Player.load_pmf(stub, path)
+        self.assertTrue(stub.has_audio)
+        self.assertEqual(os.path.getsize(stub.src_audio) > 4096, True)
+
     def test_every_audio_pack_of_every_track_is_in_time_order(self):
         for mode in ("silent", "short"):
             _, _, _, packs = demux_all(tracks.retrack(self.three, [0], mode, FFMPEG, ATRAC, self.work))

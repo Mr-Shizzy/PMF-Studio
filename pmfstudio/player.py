@@ -21,7 +21,7 @@ from tkinter import filedialog
 from .theme import S
 from .widgets import IconButton, ProgressBar, Slider
 from pmfkit import atrac3p, snd0
-from pmfkit.demux import demux, duration_seconds
+from pmfkit.demux import demux, demux_all, duration_seconds
 from pmfkit.toolinfo import passthrough_args
 from pmfkit.h264 import split_access_units, _nal_spans
 
@@ -235,7 +235,9 @@ class Player:
         self.toggle()
 
     def load_pmf(self, path):
-        P, v, a, plist = demux(open(path, "rb").read())
+        P, v, tracks, plist = demux_all(open(path, "rb").read())
+        # a movie with several languages: play the track with the most sound (a track removed by Shrink is one frame of silence)
+        a = tracks[max(sorted(tracks), key=lambda t: len(tracks[t]))] if tracks else b""
         self.src_video = os.path.join(self.work, "video.264")
         open(self.src_video, "wb").write(v)
         self.index_keyframes(v)
@@ -246,7 +248,10 @@ class Player:
         if a:
             st = atrac3p.from_units(a)
             self.src_audio = os.path.join(self.work, "audio.at3")
-            open(self.src_audio, "wb").write(snd0.build(st.frames, st.frame_bytes, loop=False))
+            try:
+                open(self.src_audio, "wb").write(snd0.build(st.frames, st.frame_bytes, loop=False))
+            except ValueError:                                  # only a few frames of sound: play the picture without it
+                self.has_audio, self.src_audio, a = False, None, b""
         self.duration = duration_seconds(v, a)
 
     def index_keyframes(self, es):
