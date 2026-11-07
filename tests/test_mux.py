@@ -100,14 +100,15 @@ class PictureSizeLimit(unittest.TestCase):
             mux_module.MAX_PICTURE = old
 
 
-# SOE.pmf: a high-bitrate movie whose big pictures fill the video buffer; Sony holds those packs back until the buffer has room (the muxer does not model that yet)
-OPEN_CLOCK_CASES = {"SOE.pmf"}
+# gameboots that still differ from Sony's clock (none now; SOE.pmf matched once the video buffer hold was added)
+OPEN_CLOCK_CASES = set()
 
 
 class PackClockMatchesSony(unittest.TestCase):
     """Sony's muxer sends packs only on its pack clock (start 3,044,236.8, step 44,236.8 ticks of 27 MHz) and admits a picture or audio unit one second
     (STD_delay 90000) before it is due; the last pack of a movie waits for the last picture's turn, and a full pack that ends exactly where a picture ends
-    does not wait for the next one; a pack that already holds a picture start is closed short when a picture arrives that is 18 pictures past the last stamp.
+    does not wait for the next one; a video pack is held until it fits the declared video buffer (retail movies fill it to 99.8-100% and never go over);
+    a pack that already holds a picture start is closed short when a picture arrives that is 18 pictures past the last stamp.
     Re-muxing every real gameboot of the pack must give the same packs with the original's clock value on every pack."""
 
     def test_every_pack_has_the_original_clock_value(self):
@@ -138,3 +139,59 @@ class PackClockMatchesSony(unittest.TestCase):
             checked += 1
         self.assertGreater(checked, 40)
         self.assertLess(skipped, 6)
+
+
+class VideoBufferNeverOverflows(unittest.TestCase):
+    """The pictures already sent and not yet decoded (removed at their DTS) plus the pack being sent must fit the declared video buffer. Retail movies
+    fill it to 99.8-100%; before the hold, our muxer sent up to a second early and went to 174% on busy movies."""
+
+    @staticmethod
+    def peak(raw):
+        import bisect
+        from pmfkit.demux import demux_all
+        from pmfkit.h264 import split_access_units
+        params, v, tr, packs = demux_all(raw)
+        aus = split_access_units(v)
+        ends, o = [], 0
+        for a in aus:
+            o += len(a.data)
+            ends.append(o)
+        dts = [(90000 + 3003 * (k - 1)) * 300 for k in range(len(aus))]
+        sent = peak = 0
+        for p in packs:
+            for it in p.items:
+                if it.sid == 0xE0:
+                    n = len(it.payload)
+                    gone = 0
+                    for j in range(bisect.bisect_right(ends, sent) - 1, -1, -1):
+                        if dts[j] <= p.scr27:
+                            gone = ends[j]
+                            break
+                    peak = max(peak, sent - gone + n)
+                    sent += n
+        return peak
+
+    def test_busy_gameboot_fills_but_never_overfills_the_buffer(self):
+        from pmfkit.demux import demux_all
+        from pmfkit.mirror import read as mirror_read
+        f = os.path.join(PACK, "SOE", "SOE.pmf")
+        if not os.path.exists(f):
+            self.skipTest("oracle PMF not present")
+        raw = open(f, "rb").read()
+        params, v, tr, packs = demux_all(raw)
+        mir = mirror_read(raw)
+        new = mux(v, atrac3p.from_units(tr[sorted(tr)[0]]), version=params.version, style=mir.style, width=params.width, height=params.height,
+                  video_kib=mir.video_kib or None, header_kib=mir.header_kib or None, audio_kib=mir.audio_kib or None)
+        cap = params.video_buffer_kib * 1024
+        mine = self.peak(new)
+        self.assertLessEqual(mine, cap)
+        self.assertGreaterEqual(mine, 0.99 * cap)                        # it uses the buffer the way Sony's muxer does
+        self.assertAlmostEqual(mine, self.peak(raw), delta=0.01 * cap)
+
+
+class EncoderBufferFitsTheMovie(unittest.TestCase):
+    def test_vbv_follows_sonys_buffer_formula(self):
+        from pmfkit.mux import vbv_kbit
+        self.assertEqual(vbv_kbit(251), 2007)             # Sony: CPB 2,000,000 bit -> 251 KiB (ceil to 1024 of CPB/8 + 6144)
+        self.assertEqual(vbv_kbit(495), 4005)
+        self.assertLessEqual(vbv_kbit(251) * 1000 // 8 + 6144, 251 * 1024)

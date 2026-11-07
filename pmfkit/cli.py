@@ -18,7 +18,7 @@ from .fit import pick_audio_kbps
 from .toolinfo import ascii_temp_dir, is_ascii
 from .gameboot import STOCK_SECONDS, BUDGET_BYTES, VERIFIED_OK_BYTES, VERIFIED_FAIL_BYTES, movie_ms
 from .snd0 import COMBINED_LIMIT
-from .mux import mux, mux_file, MAX_PICTURE, ICON1,ICON1_GOP, ICON1_VIDEO_KBPS, ICON1_AUDIO_KBPS, ICON1_MAX_BYTES, ICON1_VERIFIED_OK, ICON1_VERIFIED_FAIL
+from .mux import mux, mux_file, MAX_PICTURE, PROFILES, vbv_kbit, ICON1,ICON1_GOP, ICON1_VIDEO_KBPS, ICON1_AUDIO_KBPS, ICON1_MAX_BYTES, ICON1_VERIFIED_OK, ICON1_VERIFIED_FAIL
 
 # Sony-composer gameboots use 1 reference frame and no weighted prediction; PPSSPP plays anything, the PSP hardware decoder is stricter
 X264_PARAMS = "aud=1:nal-hrd=vbr:pic-struct=1:force-cfr=1:scenecut=0:repeat-headers=1"
@@ -156,7 +156,8 @@ FIT = {
 }
 
 
-def encode_video(ffmpeg, src, out264, seconds, width, height, kbps, gop, refs=1, weightp=0, fit="crop", bufsize=None, bframes=0, start=0, total=None):
+def encode_video(ffmpeg, src, out264, seconds, width, height, kbps, gop, refs=1, weightp=0, fit="crop", bufsize=None, bframes=0, start=0, total=None, vbv_cap=None):
+    bufsize = min(bufsize or int(kbps * 1.5), vbv_cap) if vbv_cap else bufsize
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y"] + (["-ss", "%.3f" % start] if start else []) + ["-i", src]
     if seconds:
         cmd += ["-t", str(seconds)]
@@ -272,7 +273,7 @@ def _make_pmf(a, work):
     for attempt in range(9):
         lo, hi = shares[min(attempt, 4)]
         with PROGRESS.stage(0.15 + 0.82 * lo, 0.15 + 0.82 * hi, "Encoding the picture\u2026" if attempt == 0 else "Fitting it to the best quality\u2026"):
-            encode_video(a.ffmpeg, a.input, es, a.seconds, w, h, video_kbps, gop, refs, a.weightp, a.fit, bufsize, a.bframes, getattr(a, "start", 0), total)
+            encode_video(a.ffmpeg, a.input, es, a.seconds, w, h, video_kbps, gop, refs, a.weightp, a.fit, bufsize, a.bframes, getattr(a, "start", 0), total, vbv_kbit(PROFILES[opt["style"]]["video_kib"]))
         PROGRESS.report(0.97, "Packaging the movie\u2026")
         try:
             if limit is None and getattr(a, "stream_out", None) and not a.bframes:

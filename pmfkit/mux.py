@@ -28,6 +28,7 @@ AUDIO_BUF = 4096            # audio P-STD buffer
 AUDIO_LOOKAHEAD = 90000     # STD_delay Composer writes (90 kHz ticks)
 AUDIO2_FLOOR = 16046        # the old fitted constant for the 2nd audio pack's time (90 kHz); no longer used: pass audio2_floor=AUDIO2_FLOOR to get it back (the formula in _AudioFeeder.next_floor is the default)
 STAMP_EVERY = 16
+BUFFER_HOLD = True          # hold a video pack until it fits the declared video buffer (False = send up to a second early whatever the buffer holds)
 CLOSE_AFTER = 18            # pictures since the last time stamp after which a pending short pack is closed for the next picture (0 = never)
 # Largest single picture allowed. The GOP index has a 21-bit size field and the stream's video buffer is 251 KiB (495 KiB in version 0012), so the
 # real ceiling is far higher; 95,545 bytes is the largest picture seen in a retail movie that plays on a PSP (Coded Arms sector00.pmf), so it is the proven bound.
@@ -65,6 +66,12 @@ def _on_clock(t, earliest):
     if earliest <= t:
         return t
     return t + -((t - earliest) // SCR_STEP) * SCR_STEP
+
+
+def vbv_kbit(video_kib):
+    """The encoder's VBV buffer (kbit) that fits a declared video buffer. Sony's rule: buffer = ceil_to_1024(CPB / 8 + 6144) bytes, so 251 KiB <-> a CPB
+    of 2,000,000 bit, 495 KiB <-> about 4,000,000 bit. An encoder with a larger buffer makes streams the declared buffer cannot deliver in time."""
+    return (video_kib * 1024 - 6144) * 8 // 1000
 
 
 def ts(prefix, v):
@@ -159,15 +166,17 @@ def _layout_video(aus, style, video_kib, video_lead=VIDEO_LEAD, disp=None, audio
     vext = b"\x1e" + (0x6000 | video_kib).to_bytes(2, "big")
     idr = [i for i, a in enumerate(aus) if a.gop_start] + [len(aus)]
     entries, gops = [], []
+    gends, gdts, base = [], [], 0                                   # end offset and decode time of every picture so far (for the video buffer)
     for gi in range(len(idr) - 1):
         a0, a1 = idr[gi], idr[gi + 1]
-        mine, ends = _layout_gop(gi, a0, aus[a0:a1], a1 < len(aus), pts, dts, sysh, vext, video_lead)
+        mine, ends = _layout_gop(gi, a0, aus[a0:a1], a1 < len(aus), pts, dts, sysh, vext, video_lead, base, gends, gdts, video_kib * 1024)
+        base += ends[-1]
         entries.extend(mine)
         gops.append((a0, a1, mine, ends))
     return entries, gops, sysh
 
 
-def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead):
+def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead, base=0, gends=None, gdts=None, cap=None):
     """The video packs of one GOP (a0 = index of its first access unit, has_next = another GOP follows) -> (entries, cumulative end of every AU)"""
     a1 = a0 + len(gop_aus)
     data = b"".join(a.data for a in gop_aus)
@@ -177,6 +186,10 @@ def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead):
         o += len(a.data)
         ends.append(o)
     npics = a1 - a0
+    if gends is not None:
+        for i in range(npics):
+            gends.append(base + ends[i])
+            gdts.append(dts(a0 + i))
     last_stamp, pos, first = a0, 0, True
     mine = []
     while pos < len(data):
@@ -223,6 +236,14 @@ def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead):
             # PSP froze there). Sony's own movies never deliver a picture later than MIN_VIDEO_LEAD before its decode time (smallest lead over
             # 38 movies: 35,814 ticks); ordinary packs end in the picture they start in or the next one and are not touched by this.
             e.floor = min(e.floor, dts(a0 + bisect.bisect_right(starts, pos) - 1) - MIN_VIDEO_LEAD)
+        if cap and BUFFER_HOLD:
+            # video buffer (P-STD): a pack is not sent before enough pictures already in the buffer have been decoded (removed at their DTS) for it
+            # to fit. Retail movies fill the declared buffer to 99.8-100% and never go over it.
+            need = base + end - cap
+            if need > 0:
+                m = bisect.bisect_left(gends, need)
+                if m < len(gends) and gends[m] <= base + pos:
+                    e.floor = max(e.floor, gdts[m])
         e.body = pes(0xE0, flags2, fields, data[pos:end], room)
         e.cum_end = end
         mine.append(e)
@@ -492,8 +513,10 @@ def mux_file(es_path, out_path, audio=None, version="0012", style="B", width=480
             yield au
 
     def video_entries():
+        gends, gdts, base = [], [], 0
         for gi, (a0, gop_aus, has_next) in enumerate(_gops_from(counting(iter_access_units(es_path)))):
-            mine, ends = _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead)
+            mine, ends = _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead, base, gends, gdts, video_kib * 1024)
+            base += ends[-1]
             yield mine, ends, [len(a.data) for a in gop_aus]
 
     feeder = _AudioFeeder(audio, style, audio_pts_base, audio2_floor) if audio is not None else None

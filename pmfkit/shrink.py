@@ -15,7 +15,7 @@ from . import atrac3p, mirror, snd0
 from .demux import demux, demux_all, duration_seconds
 from .extract import load_pmf
 from .h264 import split_access_units
-from .mux import mux, HEADER_KIB
+from .mux import mux, HEADER_KIB, PROFILES, vbv_kbit
 from .toolinfo import passthrough_args
 
 # how much of the picture's bitrate is kept, and the lowest the picture is allowed to go (kbps): below this it turns to mush
@@ -242,7 +242,8 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
             sound = [atrac3p.from_units(tracks[t]) for t in order] if len(order) > 1 else (atrac3p.from_units(audio) if audio else None)
 
         gop = 59
-        bufsize = int(kbps * 1.5)
+        vbv = vbv_kbit(container.get("video_kib") or PROFILES[container["style"]]["video_kib"])      # the encoder's buffer must fit the movie's own video buffer
+        bufsize = min(int(kbps * 1.5), vbv)
         best = None
         if keep_picture:
             if new_audio is None:
@@ -272,7 +273,7 @@ def shrink_one(src, dst, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, bfr
             if len(out) <= want * 1.08 or attempt == 3:
                 break
             kbps = max(FLOOR_KBPS, int(kbps * (len(video) * ratio) / max(len(out) - fixed, 1) * 0.97))      # too big: lower the bitrate and try again
-            bufsize = int(kbps * 1.5)
+            bufsize = min(int(kbps * 1.5), vbv)
         if best is None:
             raise ValueError("Couldn't make that movie smaller.")
         problem = _check(raw, best, not resound, kept if dropping else None)
