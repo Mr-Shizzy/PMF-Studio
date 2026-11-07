@@ -107,7 +107,8 @@ OPEN_CLOCK_CASES = {"SOE.pmf"}
 class PackClockMatchesSony(unittest.TestCase):
     """Sony's muxer sends packs only on its pack clock (start 3,044,236.8, step 44,236.8 ticks of 27 MHz) and admits a picture or audio unit one second
     (STD_delay 90000) before it is due; the last pack of a movie waits for the last picture's turn, and a full pack that ends exactly where a picture ends
-    does not wait for the next one. Re-muxing every real gameboot of the pack must give the original's clock value on every pack."""
+    does not wait for the next one; a pack that already holds a picture start is closed short when a picture arrives that is 18 pictures past the last stamp.
+    Re-muxing every real gameboot of the pack must give the same packs with the original's clock value on every pack."""
 
     def test_every_pack_has_the_original_clock_value(self):
         from pmfkit.demux import demux_all
@@ -125,14 +126,15 @@ class PackClockMatchesSony(unittest.TestCase):
             new = mux(v, atrac3p.from_units(tr[sorted(tr)[0]]), version=params.version, style=mir.style, width=params.width, height=params.height,
                       video_kib=mir.video_kib or None, header_kib=mir.header_kib or None, audio_kib=mir.audio_kib or None)
             packs2 = demux_all(new)[3]
-            if len(packs2) != len(packs):                    # Sony packs by time: a late-admitted tail of tiny pictures can get its own short pack (open)
+            if mir.style == "A":                             # the older composer (495 KiB video buffer) starts its clock elsewhere: not modelled
                 skipped += 1
                 continue
+            self.assertEqual(len(packs2), len(packs), f)    # same packs, including the short ones Sony closes when a time stamp is due
             off = [k for k, (a, b) in enumerate(zip(packs, packs2)) if abs(a.scr27 - b.scr27) > 1]
             if os.path.basename(f) in OPEN_CLOCK_CASES:
                 self.assertGreater(len(off), 0, f)            # still differs: when it starts to match, take it off the list
                 continue
             self.assertEqual(off, [], f)
             checked += 1
-        self.assertGreater(checked, 35)
-        self.assertLess(skipped, 12)
+        self.assertGreater(checked, 40)
+        self.assertLess(skipped, 6)

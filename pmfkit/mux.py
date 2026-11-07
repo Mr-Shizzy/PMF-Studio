@@ -28,6 +28,7 @@ AUDIO_BUF = 4096            # audio P-STD buffer
 AUDIO_LOOKAHEAD = 90000     # STD_delay Composer writes (90 kHz ticks)
 AUDIO2_FLOOR = 16046        # the old fitted constant for the 2nd audio pack's time (90 kHz); no longer used: pass audio2_floor=AUDIO2_FLOOR to get it back (the formula in _AudioFeeder.next_floor is the default)
 STAMP_EVERY = 16
+CLOSE_AFTER = 18            # pictures since the last time stamp after which a pending short pack is closed for the next picture (0 = never)
 # Largest single picture allowed. The GOP index has a 21-bit size field and the stream's video buffer is 251 KiB (495 KiB in version 0012), so the
 # real ceiling is far higher; 95,545 bytes is the largest picture seen in a retail movie that plays on a PSP (Coded Arms sector00.pmf), so it is the proven bound.
 MAX_PICTURE = 95545
@@ -196,11 +197,22 @@ def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead):
                     fields, flags2 = ts(3, pts(k)) + ts(1, dts(k)), 0xC0
                 last_stamp = k
         end = min(pos + room - 9 - len(fields), len(data))
+        closed = False
+        if not first and CLOSE_AFTER:
+            # time-based packing: a pack that already holds the start of a picture is closed short when a later picture arrives that is long
+            # overdue for a time stamp; that picture then starts a new pack (and a new stamped PES). Retail: 22 of 22 mid-GOP padded packs.
+            for q in range(bisect.bisect_left(starts, pos) + 1, npics):
+                if starts[q] >= end:
+                    break
+                if (a0 + q) - last_stamp >= CLOSE_AFTER:
+                    end = starts[q]
+                    closed = True
+                    break
         e = _Entry()
         e.kind, e.gop, e.gop_start, e.pos = "v", gi, first, None
         if end < len(data):
             kn = a0 + bisect.bisect_right(starts, end) - 1      # AU holding the byte after this pack
-            if starts[kn - a0] == end:
+            if starts[kn - a0] == end and not closed:
                 kn -= 1                                          # a full pack that ends exactly where a picture ends does not wait for the next one (retail: 6 of 6; padded packs always wait)
         else:
             kn = a1 if has_next else None
