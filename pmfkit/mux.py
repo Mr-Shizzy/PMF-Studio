@@ -211,7 +211,7 @@ def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead, bas
                 last_stamp = k
         end = min(pos + room - 9 - len(fields), len(data))
         closed = False
-        if not first and CLOSE_AFTER:
+        if CLOSE_AFTER:
             # time-based packing: a pack that already holds the start of a picture is closed short when a later picture arrives that is long
             # overdue for a time stamp; that picture then starts a new pack (and a new stamped PES). Retail: 22 of 22 mid-GOP padded packs.
             for q in range(bisect.bisect_left(starts, pos) + 1, npics):

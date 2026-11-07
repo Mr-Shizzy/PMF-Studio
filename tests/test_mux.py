@@ -141,6 +141,33 @@ class PackClockMatchesSony(unittest.TestCase):
         self.assertLess(skipped, 6)
 
 
+class StillTailIsSplitLikeSony(unittest.TestCase):
+    """Coded Arms sector01.pmf ends in one GOP of 40 tiny pictures (a still scene). Sony closes the GOP's FIRST pack after 18 pictures too, so the tail is
+    three video packs; one pack holding all 40 made the last 10 pictures arrive up to 0.3 s late."""
+
+    def test_tail_packs_match_the_original(self):
+        from pmfkit import umdimage
+        from pmfkit.demux import demux_all
+        from pmfkit.mirror import read as mirror_read
+        game = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "PSP Commercial Games", "Coded Arms.cso")
+        if not os.path.exists(game):
+            self.skipTest("oracle game not present")
+        img = umdimage.Image(game)
+        found = [m for m in umdimage.find_movies(umdimage.walk(img)) if os.path.basename(m.name).lower() == "sector01.pmf"]
+        if not found:
+            self.skipTest("movie not in the image")
+        raw = found[0].raw(img)
+        params, v, tr, packs = demux_all(raw)
+        mir = mirror_read(raw)
+        ids = sorted(tr)
+        audio = [atrac3p.from_units(tr[t]) for t in ids]
+        new = mux(v, audio if len(audio) > 1 else audio[0], version=params.version, style=mir.style, width=params.width, height=params.height,
+                  video_kib=mir.video_kib or None, header_kib=mir.header_kib or None, audio_kib=mir.audio_kib or None)
+        packs2 = demux_all(new)[3]
+        self.assertEqual(len(packs2), len(packs))
+        self.assertEqual([k for k, (a, b) in enumerate(zip(packs, packs2)) if abs(a.scr27 - b.scr27) > 1], [])
+
+
 class VideoBufferNeverOverflows(unittest.TestCase):
     """The pictures already sent and not yet decoded (removed at their DTS) plus the pack being sent must fit the declared video buffer. Retail movies
     fill it to 99.8-100%; before the hold, our muxer sent up to a second early and went to 174% on busy movies."""
