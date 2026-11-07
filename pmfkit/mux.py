@@ -200,9 +200,11 @@ def _layout_gop(gi, a0, gop_aus, has_next, pts, dts, sysh, vext, video_lead):
         e.kind, e.gop, e.gop_start, e.pos = "v", gi, first, None
         if end < len(data):
             kn = a0 + bisect.bisect_right(starts, end) - 1      # AU holding the byte after this pack
+            if starts[kn - a0] == end:
+                kn -= 1                                          # a full pack that ends exactly where a picture ends does not wait for the next one (retail: 6 of 6; padded packs always wait)
         else:
             kn = a1 if has_next else None
-        e.floor = None if kn is None else dts(kn) - video_lead
+        e.floor = dts(a1 - 1) - video_lead if kn is None else dts(kn) - video_lead      # the last pack of the movie waits for the last picture's own turn
         if kn is not None:
             # A pack that holds many tiny pictures (a still scene at a very low bitrate) must not wait for the LAST of them: the picture it
             # starts in would reach the decoder late (up to 0.84 s in a 67 s Gun Showdown intro shrunk to the lowest picture quality, and the
