@@ -38,17 +38,18 @@ Get the zip from the Releases page, unzip anywhere, run `PMF Studio.exe`. Window
 
 ## Status
 
-Beta. Everything was checked on one PSP (firmware 6.61 with ARK-5 and CXMB). Not tested yet on a PSP: movies for the C-Intro
-plugin.
+Beta. Everything was checked on one PSP (firmware 6.61 with ARK-5 and CXMB).
 
 The movie writer follows Sony's own muxer: pack timing, the video buffer (a pack waits until it fits the buffer the movie declares) and
 the encoder's buffer limit were matched against about 85 retail movies, whose streams it reproduces byte for byte. 49 of them come out with
 the same time stamp on every pack; the rest differ only in a few packs, mostly the last ones, and the older-composer style and
-LocoRoco 2's clock are not matched yet. Movies made this way played on the PSP: busy and plain gameboots, a game movie with pictures up to
-91 KB, and B-frame movies from LocoRoco 2 (shrunk to 50% and 80%). Not played on a PSP yet: the five games shrunk for knowledge only
-(Battlezone, Coded Arms, Hammerin Hero, HISTORY Ice Road Truckers, Hot Shots Shorties), and pictures between 91 KB and the 95,545-byte limit.
+LocoRoco 2's clock are not matched yet. Movies made this way played on the PSP: busy and plain gameboots, game movies with pictures up to 95,545 bytes (the limit), a movie
+that ends in a still scene, B-frame movies from LocoRoco 2 (shrunk to 50% and 80%), and a 60-second movie played both in a PMF player and as a
+real C-Intro with the C-Intro plugin. Five whole games shrunk to 50% picture (Battlezone, Coded Arms, Hammerin Hero, HISTORY Ice Road
+Truckers, Hot Shots Shorties) played on the PSP, and on a PC emulator, at least two movies each; not every movie in them was played.
 
-Keeping only some sound tracks of a game's movies worked in 007 From Russia With Love (English played with sound, the removed languages played silent, no crash); the window's picker for it has not been run on a PSP yet.
+Keeping only some sound tracks of a game's movies works in 007 From Russia With Love: shrunk with only the second language kept, the movies played silent with the PSP set to English and played in French with it set to French. The PMF players that play only the first sound track (such as the OneLua player) play silence if you remove the first track. Once, quitting a movie through the HOME button crashed the PSP; the same movie was quit three more times and played to the end without a problem, so it was not reproduced and its cause is unknown (possibly the custom firmware).
+Not tested on a real PSP: the updater (it needs a published release) and the files these tools produce on other firmware.
 
 Smaller game movies have run inside real games: 007 From Russia With Love and Family Guy at 50% picture, and Gun Showdown,
 shrunk with the whole game at the lowest picture (20%) and sound (32 kbps) settings, played through its start-up logos and the
