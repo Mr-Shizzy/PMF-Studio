@@ -810,6 +810,7 @@ class App(tk.Tk):
             self.shrink_out_label.configure(text="Save game as")
             self.shrink_note.configure(text="Your game file is never changed: the smaller game is saved as a new file (.cso is the smaller kind, .iso works too). "
                                        "Only the movies inside it change; everything else on the disc is copied exactly as it was, in the same places. "
+                                       "Movies a game keeps inside one of its big files (such as a movie.bin) are found too and stay in their places there. "
                                        "A whole game takes several minutes. Try the new game on your PSP before you delete anything.")
         else:
             auto = self.out_default("Shrunk movies")
@@ -1139,7 +1140,7 @@ class App(tk.Tk):
                 "Makes the .pmf movies of a game smaller so the game takes less room. Pick one movie or a whole folder. Each smaller movie keeps its name, picture size and length, "
                 "and goes to another folder: your originals are never changed. You choose how much data the picture keeps and the quality of the sound (or leave either as it is); "
                 "the page shows the picture and sound bitrates of your movies and what each choice gives. "
-                "You can also pick the whole game (A game: a .cso or .iso file). PMF Studio finds the movies inside it, shrinks them, and saves a new game file; only the movies change and everything else on the disc stays exactly as it was, "
+                "You can also pick the whole game (A game: a .cso or .iso file). PMF Studio finds the movies inside it (also those a game keeps inside one of its big files, such as a movie.bin), shrinks them, and saves a new game file; only the movies change and everything else on the disc stays exactly as it was, "
                 "except that Sony's UPDATE folder is emptied (the firmware update it offers is useless on custom firmware; the folder itself stays) and the game's "
                 "own XMB icon movie is never touched. "
                 "Movies with several sound tracks (usually one per language) are found for you: by default all of them are kept, or choose which to keep. "

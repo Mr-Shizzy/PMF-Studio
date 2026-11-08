@@ -381,5 +381,82 @@ class ShrinkGameTests(unittest.TestCase):
         self.assertFalse(os.path.exists(out) or os.path.exists(out + ".part"))
 
 
+class EmbeddedMovieTests(unittest.TestCase):
+    """Games such as Queen's Gate (movie.bin) and Monster Hunter 3 (DATA.BIN) keep their movies one after another inside a bigger file whose table
+    of positions lies in code the tools cannot change: each smaller movie must go back to the same place."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp(prefix="pmfembed_test_")
+        mp4 = os.path.join(cls.dir, "src.mp4")
+        subprocess.run([FFMPEG, "-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=480x272:rate=30000/1001:duration=3",
+                        "-f", "lavfi", "-i", "sine=f=440:duration=3:sample_rate=44100", "-c:v", "libx264", "-c:a", "aac", "-shortest", mp4], check=True)
+        pmf = os.path.join(cls.dir, "one.pmf")
+        cli.main(["make", mp4, "-o", pmf, "--ffmpeg", FFMPEG, "--atracdenc", ATRAC, "--video-kbps", "2500", "--audio-kbps", "128", "--quiet-audio"])
+        cls.one = open(pmf, "rb").read()
+        rnd = random.Random(5)
+        cls.front = bytes(rnd.randrange(256) for _ in range(3 * SECTOR))
+        cls.fake = b"PSMF0015" + struct.pack(">II", 2048, 2048 * 400_000) + bytes(rnd.randrange(256) for _ in range(SECTOR - 16))      # a sector-aligned header that lies: it claims 800 MB
+        cls.noise = bytes(rnd.randrange(256) for _ in range(700)) + b"PSMF0015" + bytes(rnd.randrange(256) for _ in range(SECTOR - 708))   # PSMF not at a sector start
+        cls.tail = bytes(rnd.randrange(256) for _ in range(5000))
+        cls.blob = cls.front + cls.one + cls.fake + cls.noise + cls.one + cls.tail
+        files = simple_files()
+        del files["\\PSP_GAME\\USRDIR\\FMV\\ONE.PMF"]
+        files["\\PSP_GAME\\USRDIR\\MOVIE.BIN"] = cls.blob
+        files["\\PSP_GAME\\USRDIR\\LAST.BIN"] = bytes(random.Random(1).randrange(256) for _ in range(20000))
+        game, lst = make_game(cls.dir, files)
+        cls.iso = os.path.join(cls.dir, "game.iso")
+        build_umd_iso.build(game, lst, cls.iso, log=lambda *a: None)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def test_movies_inside_a_bin_are_found_by_their_own_header_and_nothing_else_is(self):
+        img = umdimage.Image(self.iso)
+        try:
+            entries = umdimage.walk(img)
+            self.assertEqual(umdimage.find_movies(entries), [])                         # no .pmf file on this disc
+            movies = umdimage.find_all_movies(img, entries)
+            binf = [e for e in entries if e.path.endswith("MOVIE.BIN")][0]
+            first = binf.extent + len(self.front) // SECTOR
+            second = first + (len(self.one) + len(self.fake) + len(self.noise)) // SECTOR
+            self.assertEqual([(m.extent, m.size) for m in movies], [(first, len(self.one)), (second, len(self.one))])
+            self.assertEqual([m.name for m in movies], ["\\PSP_GAME\\USRDIR\\MOVIE.BIN #1", "\\PSP_GAME\\USRDIR\\MOVIE.BIN #2"])
+            self.assertTrue(all(m.raw(img) == self.one for m in movies))
+        finally:
+            img.close()
+
+    def test_a_game_with_movies_inside_a_bin_is_shrunk_in_place(self):
+        out = os.path.join(self.dir, "small.cso")
+        results = umdimage.shrink_image(self.iso, out, FFMPEG, ATRAC, ratio=0.5, sound_kbps=64, bframes=0, log=lambda *a: None)
+        self.assertEqual(results.pop().note, "game image")
+        self.assertEqual(len(results), 2)                                               # two places, one movie: shrunk once, the result used twice
+        self.assertLess(results[0].after, results[0].before)
+        self.assertEqual(results[0].after, results[1].after)
+        old, new = umdimage.Image(self.iso), umdimage.Image(out)
+        try:
+            self.assertEqual(old.sectors, new.sectors)
+            old_e = {e.path: e for e in umdimage.walk(old)}
+            new_e = {e.path: e for e in umdimage.walk(new)}
+            self.assertEqual({p: (e.extent, e.size) for p, e in old_e.items() if "UPDATE" not in p}, {p: (e.extent, e.size) for p, e in new_e.items()})   # the bin keeps its place and size
+            b = new_e["\\PSP_GAME\\USRDIR\\MOVIE.BIN"]
+            data = new.read(b.extent, -(-b.size // SECTOR))[:b.size]
+            self.assertEqual(data[:len(self.front)], self.front)                        # what lay before, between and after the movies is untouched
+            gap = len(self.front) + len(self.one)
+            self.assertEqual(data[gap:gap + len(self.fake) + len(self.noise)], self.fake + self.noise)
+            self.assertEqual(data[-len(self.tail):], self.tail)
+            n = results[0].after
+            for start in (len(self.front), gap + len(self.fake) + len(self.noise)):
+                slot = data[start:start + len(self.one)]
+                demux_all(slot[:n])                                                     # a movie again, smaller
+                self.assertEqual(slot[:4], b"PSMF")
+                self.assertFalse(any(slot[n:]))                                         # and the rest of its place is empty
+                self.assertEqual(struct.unpack(">I", slot[12:16])[0] + 2048, n)
+        finally:
+            old.close()
+            new.close()
+
+
 if __name__ == "__main__":
     unittest.main()

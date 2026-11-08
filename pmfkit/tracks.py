@@ -104,7 +104,7 @@ def multitrack_movies(path, limit=12):
     if umdimage.is_image(path):
         img = umdimage.Image(path)
         try:
-            for m in sorted(umdimage.find_movies(umdimage.walk(img)), key=lambda m: -m.size):
+            for m in sorted(umdimage.find_all_movies(img, umdimage.walk(img)), key=lambda m: -m.size):
                 if _track_count(img.read(m.extent, 1)) >= 2:
                     found.append((os.path.basename(m.name), lambda e=m.extent, n=m.size: _image_movie(path, e, n)))
                     if len(found) >= limit:

@@ -199,8 +199,8 @@ def plan_update_removal(img, entries, keep_sectors=()):
 class Movie:
     """one movie on the disc: its data, and every name that points at it"""
 
-    def __init__(self, extent, size, entries):
-        self.extent, self.size, self.entries = extent, size, entries
+    def __init__(self, extent, size, entries, label=None):
+        self.extent, self.size, self.entries, self.label = extent, size, entries, label
 
     @property
     def sectors(self):
@@ -208,7 +208,7 @@ class Movie:
 
     @property
     def name(self):
-        return self.entries[0].path
+        return self.label or self.entries[0].path
 
     def raw(self, img):
         return img.read(self.extent, self.sectors)[:self.size]
@@ -229,12 +229,77 @@ def find_movies(entries):
     return sorted((Movie(ex, sz, sorted(es, key=lambda e: e.path)) for (ex, sz), es in groups.items() if per_extent[ex] == 1), key=lambda m: m.extent)
 
 
+NOT_CONTAINERS = (".PMF", ".PNG", ".JPG", ".SFO", ".AT3", ".PBP", ".RCO", ".PRX", ".TXT")   # files that never hold movies inside them
+MIN_CONTAINER = 256 * 1024
+_EMBEDDED = {}                                      # (path, size, mtime) -> movies found inside the game's files: one scan per image
+
+
+def _embedded_in(img, e, check):
+    """the PMF movies lying one after another (or apart) inside the file `e`, each starting on a sector: [(offset in the file, length)].
+    A movie is the PSMF header's own size plus the stream size it declares (a whole number of sectors); its first pack follows the header.
+    What lies inside an earlier movie is never taken for another."""
+    found, end = [], 0
+    nsec = -(-e.size // SECTOR)
+    for s0 in range(0, nsec, CHUNK):
+        data = img.read(e.extent + s0, min(CHUNK, nsec - s0))
+        i = data.find(b"PSMF")
+        while i >= 0:
+            if i % SECTOR == 0:
+                off = (s0 + i // SECTOR) * SECTOR
+                head = data[i:i + 16]
+                if off >= end and len(head) == 16 and head[4:8].isdigit():
+                    hs, stream = struct.unpack(">II", head[8:16])
+                    total = hs + stream
+                    if hs in (2048, 4096, 6144, 8192) and stream and total % SECTOR == 0 and off + total <= nsec * SECTOR:
+                        if img.read(e.extent + off // SECTOR + hs // SECTOR, 1)[:4] == b"\x00\x00\x01\xba":
+                            found.append((off, total))
+                            end = off + total
+            i = data.find(b"PSMF", i + 1)
+        check()
+    return found
+
+
+def find_embedded(img, entries, check=lambda: None):
+    """movies stored inside other game files (a movie.bin that holds all of a game's movies, one after another): they are found by their own
+    PSMF header, since the game's table of where they are lies in code or an archive index nobody can change. -> list of Movie (with no
+    directory record to correct: the container keeps its size), named like "\\PSP_GAME\\USRDIR\\movie.bin #3". Cached per image."""
+    try:
+        st = os.stat(img.path)
+        key = (os.path.normcase(os.path.abspath(img.path)), st.st_size, int(st.st_mtime))
+    except OSError:
+        key = None
+    if key in _EMBEDDED:
+        return list(_EMBEDDED[key])
+    out = []
+    for e in entries:
+        up = e.path.upper()
+        if up.endswith(NOT_CONTAINERS) or "\\UPDATE\\" in up or e.size < MIN_CONTAINER:
+            continue
+        spans = _embedded_in(img, e, check)
+        for n, (off, length) in enumerate(spans, 1):
+            out.append(Movie(e.extent + off // SECTOR, length, [], "%s #%d" % (e.path, n)))
+    if key is not None:
+        _EMBEDDED[key] = tuple(out)
+    return out
+
+
+def find_all_movies(img, entries, check=lambda: None):
+    """the game's .pmf files and the movies stored inside its other files, in disc order"""
+    out, end = [], 0
+    for m in sorted(find_movies(entries) + find_embedded(img, entries, check), key=lambda m: m.extent):
+        if m.extent >= end:                          # two movies never share sectors (only a file lying across another could)
+            out.append(m)
+            end = m.extent + m.sectors
+    return out
+
+
 def survey_image(path, samples=3):
     """what the movies on a disc look like (see shrink.survey)"""
     from . import shrink
     img = Image(path)
     try:
-        movies = find_movies(walk(img))
+        entries = walk(img)
+        movies = find_all_movies(img, entries)
         if not movies:
             return shrink.Survey()
         picked = sorted(movies, key=lambda m: -m.size)[:samples]
@@ -322,11 +387,16 @@ def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, b
     try:
         try:
             entries = walk(img)
-            movies = find_movies(entries)
+            PROGRESS.report(0.0, "Looking for the movies on the disc…")
+            movies = find_all_movies(img, entries, check_cancel)
         except ValueError as e:
             raise BuildError(str(e))
         if not movies:
             raise BuildError("There are no .pmf movies on that disc.")
+        inside = [m for m in movies if m.label]
+        if inside:
+            log("%d of the movies lie inside other game files (%s): each smaller movie goes back into its own place there, the rest of the place stays empty."
+                % (len(inside), ", ".join(sorted({m.label.rsplit(" #", 1)[0].rsplit("\\", 1)[-1] for m in inside}))))
         results, replacements, done = [], [], {}
         for i, m in enumerate(movies):
             check_cancel()
@@ -436,7 +506,7 @@ def retrack_image(src, out, keep, others, ffmpeg=None, atracdenc=None, log=print
     try:
         try:
             entries = walk(img)
-            movies = find_movies(entries)
+            movies = find_all_movies(img, entries, check_cancel)
         except ValueError as e:
             raise BuildError(str(e))
         by_path = {e.path.upper(): e for e in entries}

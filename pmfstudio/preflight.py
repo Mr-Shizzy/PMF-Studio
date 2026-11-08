@@ -137,7 +137,7 @@ def needs(mode, v, tools, out_folder):
             # wait in the temporary folder until the image is written
             img = umdimage.Image(v["src"])
             try:
-                movies = umdimage.find_movies(umdimage.walk(img))
+                movies = umdimage.find_all_movies(img, umdimage.walk(img))
                 disc_bytes = img.size
             finally:
                 img.close()
