@@ -1,8 +1,10 @@
 """Dragging files onto the window (or onto the program's icon, or giving them on the command line): which page and which box each one
-belongs in, and the Windows hook that receives the drop (no extra library: the shell's own drag-and-drop calls)."""
+belongs in, and what receives the drop: on Windows a hook on the shell's own drag-and-drop calls (no extra library), on Linux the tkdnd
+extension for Tk (X11 drag and drop, the protocol file managers use; also works on Wayland desktops through XWayland), shipped in tools/tkdnd."""
 import ctypes
 import os
-from ctypes import wintypes
+
+from . import paths
 
 VIDEO = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv", ".mpg", ".mpeg", ".gif", ".ts", ".m2ts", ".3gp"}
 AUDIO = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".oma", ".wma"}
@@ -62,12 +64,45 @@ def route(paths, mode):
     return None, None, None, "PMF Studio can't use %s here." % name
 
 
+def tkdnd_dir():
+    """the folder holding the tkdnd package (libtkdnd, pkgIndex.tcl and its scripts), or None when it was not shipped"""
+    for d in (os.path.join(paths.app_dir(), "tools", "tkdnd"),):
+        if os.path.isfile(os.path.join(d, "pkgIndex.tcl")):
+            return d
+    return None
+
+
+def enable_tkdnd(window, on_drop):
+    """Linux: the whole window accepts dropped files. -> None, or the reason it could not be set up"""
+    folder = tkdnd_dir()
+    if not folder:
+        return "the drag-and-drop library (tools/tkdnd) is missing"
+    try:
+        tk = window.tk
+        tk.call("lappend", "auto_path", folder)
+        tk.call("package", "require", "tkdnd")
+        tk.call("tkdnd::drop_target", "register", window._w, "DND_Files")
+
+        def dropped(data, *_):                                   # %D: the dropped names as a Tcl list (tkdnd turns file:// links into paths)
+            files = [p for p in tk.splitlist(data) if p]
+            if files:
+                window.after(10, lambda: on_drop(files))
+            return "copy"                                        # what the drop is told: the file is only read, never moved
+
+        window._drop_cmd = window.register(dropped)
+        tk.call("bind", window._w, "<<Drop:DND_Files>>", window._drop_cmd + " %D")
+        return None
+    except Exception as e:                                       # noqa: BLE001
+        return str(e)
+
+
 def enable(window, on_drop):
-    """Lets files be dragged from Explorer onto the window; on_drop(list of paths) is called on the window's own thread.
+    """Lets files be dragged from the file manager onto the window; on_drop(list of paths) is called on the window's own thread.
     Returns None, or a sentence saying why it isn't available (the program works without it)."""
     if os.name != "nt":
-        return "not on this system"
+        return enable_tkdnd(window, on_drop)
     try:
+        from ctypes import wintypes
         window.update_idletasks()
         user32, shell32 = ctypes.windll.user32, ctypes.windll.shell32
         hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()

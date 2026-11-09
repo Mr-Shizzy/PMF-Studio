@@ -27,7 +27,7 @@ More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/s
 - **Player**: plays PMF movies and sounds inside the program, with full screen.
 - Picks the part of a long movie that fits (a strip with a block you drag), keeps the best quality the size limit allows, shows a
   progress bar for everything that takes time, light and dark themes.
-- Drag and drop (Windows only for now): drop a movie, EBOOT.PBP, PMF, sound or folder on the window (or on the exe) and it lands in the right box.
+- Drag and drop: drop a movie, EBOOT.PBP, PMF, sound or folder on the window (or on the exe) and it lands in the right box.
 - Self-test on the Options page, with a Copy report button that makes text for a bug report without your folder names or user name.
 - Stop button, checks before a job (free space, odd names, saving over your own file), working files cleaned up.
 - Updates itself when you ask: downloads the new release, verifies its SHA-256, tests it, swaps it in, and rolls back if that fails.
@@ -51,7 +51,7 @@ Beta. Everything was checked on one PSP (firmware 6.61 with ARK-5 and CXMB).
 Linux is new in 0.2 and experimental. It was tested on Ubuntu 24.04 running inside Windows (WSL2), not on a physical Linux desktop or other
 distributions: all the tests pass there, the movie writer and the sound encoder make byte-for-byte the same files as on Windows from the same
 input, the finished tar.gz and AppImage pass their self-test, and the updater was tried with a release file on disk (not against a published
-release). The player has no sound on Linux yet, and dragging files onto the window doesn't work there yet (use the Browse buttons).
+release). The player's sound (PulseAudio or PipeWire) and dragging files onto the window (X11 drag and drop, through XWayland on Wayland) were tried there with a recorded sound check and a drag made by a program that follows the protocol, not with a real speaker or a real file manager.
 
 The movie writer follows Sony's own muxer: pack timing, the video buffer (a pack waits until it fits the buffer the movie declares) and
 the encoder's buffer limit were matched against about 85 retail movies, whose streams it reproduces byte for byte. 49 of them come out with

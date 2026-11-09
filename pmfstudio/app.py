@@ -1182,11 +1182,11 @@ class App(tk.Tk):
         text = ("Getting started\n"
                 "Pick what you want to make on the left, choose your files, and press the button at the bottom. "
                 "Your original files are never changed. "
-                + ("You can also drag files onto the window (or onto the PMF Studio icon): "
-                   "a movie, an EBOOT.PBP, a PMF, a sound or a folder goes to the right page and box. " if os.name == "nt" else
-                   "(Dragging files onto the window works on Windows only for now: use the Browse buttons.) ")
-                + 
-                "A Stop button appears while something is working.\n\n"
+                + ("You can also drag files onto the window (or onto the PMF Studio icon): " if os.name == "nt" else
+                   "You can also drag files from your file manager onto the window: ")
+                + "a movie, an EBOOT.PBP, a PMF, a sound or a folder goes to the right page and box. "
+                + ("" if not getattr(self, "drop_problem", None) else "(Dragging files in does not work on this computer, see Options > Copy report: use the Browse buttons.) ")
+                + "A Stop button appears while something is working.\n\n"
                 "Gameboot\n"
                 "The movie that plays when you start a game. Tick Create CTF to also get a theme file for CXMB: copy it to PSP/THEME and pick it in your PSP's theme settings. "
                 "A gameboot can't be much bigger than 3 MB, so PMF Studio lowers the quality until it fits. "
@@ -1301,6 +1301,9 @@ class App(tk.Tk):
             pass
         ram = preflight.free_ram()
         lines.append("Free memory: %s" % (preflight.fmt(ram) if ram else "unknown"))
+        lines.append("Dragging files onto the window: %s" % ("works" if not getattr(self, "drop_problem", None) else "not available (%s)" % scrub(str(self.drop_problem))))
+        out = getattr(self.player, "audio", None) if self.player else None
+        lines.append("Sound for the Player: %s" % ("not opened yet" if not self.player else ("ready (%s)" % type(out).__name__ if out else "no sound output found")))
         lines.append("Settings: theme %s, lower priority %s, updates on startup %s" % ("dark" if self.settings["dark"] else "light", self.settings["low_priority"], self.settings["auto_update"]))
         trace = getattr(self, "last_trace", "")
         lines.append("Last unexpected error:\n" + scrub(trace[-1500:]) if trace else "No unexpected errors in this run.")

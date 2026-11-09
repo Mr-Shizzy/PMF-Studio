@@ -145,6 +145,28 @@ def unpack_ffmpeg(zpath, dest_tools, dest_lic):
         shutil.copy(os.path.join(LINUX_FFMPEG_LICENCES, name), os.path.join(dest_lic, name))
 
 
+TKDND = os.path.join(ROOT, "tools", "tkdnd")
+
+
+def add_tkdnd(dest_tools, dest_lic):
+    """Linux: the drag-and-drop extension for Tk, built by packaging/linux/build_tkdnd.sh (tkdnd 2.9.5 against Tk 9.0.4), with its licence texts"""
+    lib = next((f for f in sorted(os.listdir(TKDND)) if f.startswith("libtkdnd") and f.endswith(".so")), None) if os.path.isdir(TKDND) else None
+    if not lib or not os.path.isfile(os.path.join(TKDND, "pkgIndex.tcl")):
+        sys.exit("tools/tkdnd is missing: build it first with packaging/linux/build_tkdnd.sh")
+    with open(os.path.join(TKDND, lib), "rb") as f:
+        if f.read(4) != b"ELF":
+            sys.exit("tools/tkdnd/%s is not a Linux library" % lib)
+    out = os.path.join(dest_tools, "tkdnd")
+    os.makedirs(out, exist_ok=True)
+    for name in sorted(os.listdir(TKDND)):
+        if name.startswith("license."):
+            shutil.copy(os.path.join(TKDND, name), os.path.join(dest_lic, name.replace("license.", "").replace(".txt", "") + "-LICENSE.txt"))
+        else:
+            shutil.copy(os.path.join(TKDND, name), os.path.join(out, name))
+    os.chmod(os.path.join(out, lib), 0o755)
+    say("drag and drop for Linux: %s, SHA-256 %s" % (lib, sha256(os.path.join(out, lib))))
+
+
 def pyinstaller():
     say("packing the program with PyInstaller")
     for d in (os.path.join(BUILD, "dist"), os.path.join(BUILD, "work")):
@@ -187,6 +209,8 @@ def assemble(packed, zpath, pin):
     for d in (tools, lic, src):
         os.makedirs(d, exist_ok=True)
     unpack_ffmpeg(zpath, tools, lic)
+    if not WINDOWS:
+        add_tkdnd(tools, lic)
     atrac = os.path.join(ROOT, "tools", "atracdenc")
     shutil.copy(os.path.join(atrac, "bin", "atracdenc" + EXE), os.path.join(tools, "atracdenc" + EXE))
     for f in atracdenc_source_files(atrac):

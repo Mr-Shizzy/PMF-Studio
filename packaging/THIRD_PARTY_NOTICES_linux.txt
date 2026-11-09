@@ -37,6 +37,15 @@ Source:  the upstream commit named in source/atracdenc/BASE_COMMIT.txt, plus fou
          You can rebuild atracdenc from that source and put your own build in tools/ to replace it.
 
 
+tkdnd  (tools/tkdnd)
+--------------------
+Drag and drop of files onto the window, for Tk on X11 (and on Wayland desktops, through XWayland). tkdnd 2.9.5 by Georgios Petasis:
+https://github.com/petasis/tkdnd
+Licence: the Tcl/Tk-style licence (permissive, compatible with the GPL): licenses/tkdnd-LICENSE.txt.
+Build:   made by the PMF Studio project from the official source (packaging/linux/build_tkdnd.sh in the repository: tkdnd 2.9.5 with the
+         header files and stub code of Tcl 9.0.4 and Tk 9.0.4, hashes pinned). Unchanged source; the Tcl and Tk licence texts are
+         licenses/tcl-LICENSE.txt and licenses/tk-LICENSE.txt. It uses the system's libX11.
+
 Python  (the "PMF Studio" program and its _internal folder)
 -----------------------------------------------------------
 PMF Studio is written in Python and packaged with PyInstaller. The Python runtime is under the Python Software Foundation licence

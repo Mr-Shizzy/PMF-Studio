@@ -69,3 +69,4 @@ CODEX_PMF_STUDIO_IMPORT.md
 # Linux helper programs (downloaded by the build, never committed)
 tools/ffmpeg
 tools/ffprobe
+tools/tkdnd

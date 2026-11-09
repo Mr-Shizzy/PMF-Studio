@@ -13,8 +13,10 @@ You can move or rename the folder whenever you like.
 This is the first Linux version and it is experimental. It was tested on Ubuntu 24.04 (inside Windows) and by comparing the files it makes
 with the Windows version (they are identical). It was not tried on other distributions or on a physical Linux desktop.
 What is different from the Windows version:
-  - The player (Make > Player) shows the picture but has no sound yet.
-  - Dragging files onto the window does not work yet; use the Browse buttons.
+  - The player (Make > Player) plays sound through PulseAudio or PipeWire (the sound server almost every desktop has; the program uses
+    its libpulse-simple library). With no sound server the picture still plays, silently.
+  - Dragging files onto the window uses the X11 drag-and-drop protocol, which file managers use (on Wayland desktops through XWayland).
+    If it does not work on your desktop, use the Browse buttons, and tell us (Options > Run self-test > Copy report shows its state).
   - The program needs a graphical desktop (X11 or Wayland with XWayland) and the usual system libraries (libX11).
 Everything that makes files (gameboot, C-Intro, EBOOT icon, shrinking game movies, AT3 tools, Extract) works as on Windows.
 
