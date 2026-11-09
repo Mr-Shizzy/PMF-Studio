@@ -347,9 +347,11 @@ def cmd_gameboot(a):
     elif a.rco:
         rco_bytes = rcomod.load(open(a.rco, "rb").read())     # fails early, with an explanation, for an encrypted file
         rcomod.find_delay(rco_bytes)
-        problem = rcomod.mismatch(rco_bytes, a.firmware)
-        if problem:
-            fail(problem)
+        known = rcomod.identify(rco_bytes)
+        if known:
+            print("opening_plugin.rco recognised: firmware %s" % rcomod.names(known))
+            if not a.firmware:
+                a.firmware = known[-1]
     elif seconds * 1000 > STOCK_SECONDS * 1000 + 100:
         fail("this movie is %.1f s long but the stock gameboot lasts %.1f s. Give your own decrypted opening_plugin.rco with --rco "
                  "(it is patched, the original is not touched) or trim with -t %.1f" % (seconds, STOCK_SECONDS, STOCK_SECONDS))
@@ -384,7 +386,7 @@ def cmd_gameboot(a):
     image = grab_rgba(ff, shot, ptfmod.IMG_W, ptfmod.IMG_H, at)
     icon = grab_rgba(ff, shot, ptfmod.ICON_W, ptfmod.ICON_H, at)
     title = a.title if a.title is not None else os.path.splitext(os.path.basename(a.input))[0]
-    out = ctfmod.build(ptfmod.new(icon, image, title, a.author), files, firmware=a.firmware)
+    out = ctfmod.build(ptfmod.new(icon, image, title, a.author), files, firmware=rcomod.digits(a.firmware or "661"))
     open(a.output, "wb").write(out)
     print("wrote %s (%d bytes; gameboot.pmf %d bytes, %.1f s)" % (a.output, len(out), len(pmf), ms / 1000))
     if len(pmf) > VERIFIED_OK_BYTES:
@@ -554,7 +556,7 @@ def main(argv=None):
     g.add_argument("--rco", help="your own DECRYPTED opening_plugin.rco (needed for movies over 2.5 s); it is patched in the CTF, never in place")
     g.add_argument("--title", help="theme title stored in the PTF (default: the input's file name)")
     g.add_argument("--author", default="")
-    g.add_argument("--firmware", default="661", help="firmware digits for the CTF marker (661 = 6.61, 660 = 6.60, 550 = 5.50 ...); a known opening_plugin.rco must belong to this firmware")
+    g.add_argument("--firmware", default=None, help="firmware digits for the CTF marker (661 = 6.61, 550 = 5.50 ...); default: the firmware a known opening_plugin.rco is from, else 661")
     g.add_argument("--preview", help="picture for the theme preview (default: a frame of the video)")
     g.add_argument("--ffmpeg", default="ffmpeg")
     g.add_argument("--atracdenc", help="path to atracdenc; enables sound")

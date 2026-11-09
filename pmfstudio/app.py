@@ -678,22 +678,15 @@ class App(tk.Tk):
         for w in self.ctf_holder.winfo_children():
             w.destroy()
         self.row("preview", "Preview picture", types=IMAGES, enabled=on, parent=self.ctf_holder)
-        f = tk.Frame(self.ctf_holder, bg=T.bg)
-        f.pack(fill="x", pady=3)
-        self.label_cell(f, "Firmware", enabled=on)
-        fw = self.vars.setdefault("firmware", tk.StringVar(value="6.61"))
-        ttk.Combobox(f, textvariable=fw, values=[rcomod.label(x) for x in rcomod.FIRMWARES], state="readonly" if on else "disabled", width=8).pack(side="left")
-        tk.Label(f, text="the firmware your PSP runs", bg=T.bg, fg=T.muted, font=(FONT, 9)).pack(side="left", padx=10)
         self.row("rco", "Decrypted RCO", types=[("RCO files", "*.rco"), ("All files", "*.*")], enabled=on, parent=self.ctf_holder)
         self.rco_status = tk.Label(self.ctf_holder, text="", bg=T.bg, fg=T.muted, font=(FONT, 9), anchor="w", justify="left", wraplength=S(640))
         self.rco_status.pack(fill="x")
         if on:
             self.note("A CTF is a theme file for CXMB. Copy it to PSP/THEME. For a movie longer than 2.5 seconds, pick the decrypted opening_plugin.rco "
-                      "from the same firmware as your PSP (it is only patched in a copy).", parent=self.ctf_holder)
+                      "from your PSP's firmware (it is only patched in a copy).", parent=self.ctf_holder)
         rco = self.vars["rco"]
         if not getattr(rco, "_hint_traced", False):
             rco.trace_add("write", lambda *a: self.rco_picked())
-            fw.trace_add("write", lambda *a: self.rco_check())
             rco._hint_traced = True
         self.rco_check()
         self.trim_recompute()
@@ -718,15 +711,11 @@ class App(tk.Tk):
             return None, str(e)
 
     def rco_picked(self):
-        """a new file in the RCO box: when it is a known firmware's file, the firmware box follows it (the newest version that shares the file)"""
-        data, _ = self.rco_file()
-        group = rcomod.identify(data) if data else None
-        if group and rcomod.digits(self.vars["firmware"].get()) not in group:
-            self.vars["firmware"].set(rcomod.label(group[-1]))
         self.rco_check()
         self.trim_recompute()
 
     def rco_check(self):
+        """under the RCO box: which firmware the file is from (the user checks that it is theirs), or why it can't be used"""
         lab = getattr(self, "rco_status", None)
         if lab is None or not self.alive(lab):
             return
@@ -738,13 +727,10 @@ class App(tk.Tk):
             text, colour = problem, BAD
         elif data:
             group = rcomod.identify(data)
-            wrong = rcomod.mismatch(data, self.vars["firmware"].get())
-            if wrong:
-                text, colour = wrong, BAD
-            elif group:
-                text, colour = "This is the opening_plugin.rco of firmware %s." % rcomod.names(group), OK
+            if group:
+                text, colour = "Detected: the opening_plugin.rco of firmware %s. Make sure this is your PSP's firmware." % rcomod.names(group), OK
             else:
-                text = "This looks like an opening_plugin.rco, but it is not one PMF Studio knows. It will be used as it is."
+                text = "This looks like an opening_plugin.rco, but PMF Studio doesn't know which firmware it is from. It will be used as it is. Make sure it is from your PSP's firmware."
         lab.configure(text=text, fg=colour)
 
     def page_cintro(self):
@@ -1201,7 +1187,7 @@ class App(tk.Tk):
                 "The movie that plays when you start a game. Tick Create CTF to also get a theme file for CXMB: copy it to PSP/THEME and pick it in your PSP's theme settings. "
                 "A gameboot can't be much bigger than 3 MB, so PMF Studio lowers the quality until it fits. "
                 "Movies longer than 2.5 seconds need your own opening_plugin.rco, decrypted, from the same firmware as your PSP. "
-                "Choose your PSP's firmware in the Firmware box; PMF Studio recognises the opening_plugin.rco of firmware 5.00 to 6.61 and tells you when the file and the firmware don't match. "
+                "When you pick it, PMF Studio says which firmware it recognises the file from (it knows 5.00 to 6.61); making sure that is your PSP's firmware is up to you. "
                 "The RCO you give is never changed: the longer boot is patched into a copy inside the theme.\n\n"
                 "C-Intro\n"
                 "A movie for the C-Intro plugin. There is no size limit.\n\n"

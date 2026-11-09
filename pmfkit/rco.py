@@ -19,9 +19,7 @@ MAGIC = b"\x00PRF"
 
 INVALID = "Invalid File. Please choose a decrypted opening_plugin.rco from your specific firmware version"
 
-# The firmware versions a CTF can be marked for (the folders of CTFtool's base files). Firmware 3.71, 3.90 and 4.01 have no opening_plugin.rco
-# there and 6.31 has none either, so nothing is known about their files.
-FIRMWARES = ("371", "390", "401", "500", "550", "620", "631", "635", "637", "638", "639", "660", "661")
+# Only the firmwares whose decrypted file we hold are listed (CTFtool's base folders); others exist but are not known here.
 # sha256 of the plain (decrypted, decompressed) opening_plugin.rco -> the firmware versions whose file it is, from CTFtool's base folders.
 # Several versions share one byte-identical file, so a file can name its family but not always the exact version.
 KNOWN = {
@@ -52,17 +50,6 @@ def identify(rco):
     return KNOWN.get(hashlib.sha256(rco).hexdigest())
 
 
-def mismatch(rco, firmware):
-    """a sentence when this RCO is a known firmware's file and the chosen firmware is not one of that file's versions; None otherwise
-    (a firmware with no known file, or a file that is not a known one, is not judged)"""
-    fw = digits(firmware)
-    group = identify(rco)
-    if group is None or fw in group or not any(fw in g for g in KNOWN.values()):
-        return None
-    return ("This opening_plugin.rco is the one from firmware %s, but the theme is for firmware %s. Choose the firmware your PSP runs, "
-            "and the opening_plugin.rco from that firmware." % (names(group), label(fw)))
-
-
 def _f(v):
     return struct.pack("<f", v)
 
@@ -91,7 +78,7 @@ def find_delay(rco):
             if 0.0 <= v < 1e7:
                 hits.append(p)
     if len(hits) != 1:
-        raise ValueError("found %d candidate gameboot delays, expected 1; this firmware's RCO is not recognised" % len(hits))
+        raise ValueError("PMF Studio could not find the gameboot length in this file (%d places match, it needs exactly 1). It may be from a firmware PMF Studio does not know yet." % len(hits))
     return hits[0]
 
 
