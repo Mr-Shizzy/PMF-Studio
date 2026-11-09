@@ -20,6 +20,8 @@ More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/s
   Movies with several sound tracks (one per language) keep all of them, or you press Play to hear each track and keep only the ones you want (the others
   stay in their places but empty, so the movies get smaller; the game plays the kept language and is silent under a removed one). You can also pick a whole game (a `.cso` or `.iso` of your own backup): PMF Studio finds
   the movies inside it, shrinks them and writes a new game file in which only the movies changed and every other byte of the disc stays as it was.
+  Movies that a game keeps inside one of its own big files (a `movie.bin`, for example) are found too, by their own header, and stay in their places
+  (the game finds them by position, so the rest of each place is left empty; in a `.cso` that empty space takes no room).
 - **AT3 Tools**: make an AT3 from any sound, shrink an AT3 from a game, or turn an AT3 into a WAV or MP3.
 - **Extract**: takes any PMF apart into an MP4 (and its sound as AT3 and WAV).
 - **Player**: plays PMF movies and sounds inside the program, with full screen.
@@ -47,6 +49,9 @@ LocoRoco 2's clock are not matched yet. Movies made this way played on the PSP: 
 that ends in a still scene, B-frame movies from LocoRoco 2 (shrunk to 50% and 80%), and a 60-second movie played both in a PMF player and as a
 real C-Intro with the C-Intro plugin. Five whole games shrunk to 50% picture (Battlezone, Coded Arms, Hammerin Hero, HISTORY Ice Road
 Truckers, Hot Shots Shorties) played on the PSP, and on a PC emulator, at least two movies each; not every movie in them was played.
+Queen's Gate: Spiral Chaos keeps its 13 movies inside one file (`movie.bin`). Shrunk to 50% picture, its opening movie played all the way through on the PSP, and
+three more of its movies (the longest, the shortest and the last) also played through when put in the opening's place; the other nine were not played on the PSP,
+only checked on the PC. Monster Hunter Portable 3rd keeps 12 movies inside `DATA.BIN`; they are found, but that game was not shrunk or played.
 
 Keeping only some sound tracks of a game's movies works in 007 From Russia With Love: shrunk with only the second language kept, the movies played silent with the PSP set to English and played in French with it set to French. The PMF players that play only the first sound track (such as the OneLua player) play silence if you remove the first track. Once, quitting a movie through the HOME button crashed the PSP; the same movie was quit three more times and played to the end without a problem, so it was not reproduced and its cause is unknown (possibly the custom firmware).
 Not tested on a real PSP: the updater (it needs a published release) and the files these tools produce on other firmware.
