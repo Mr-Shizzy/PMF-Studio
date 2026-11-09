@@ -278,7 +278,7 @@ class App(tk.Tk):
         HeaderButton(bar, "Options", lambda: self.show("options")).pack(side="left", padx=4)
         body = tk.Frame(self, bg=T.bg)
         body.pack(fill="both", expand=True)
-        self.side = tk.Frame(body, bg=T.side, width=S(200), highlightbackground=T.line, highlightthickness=1)
+        self.side = tk.Frame(body, bg=T.side, width=S(200 if os.name == "nt" else 228), highlightbackground=T.line, highlightthickness=1)      # Linux's font is wider
         self.side.pack(side="left", fill="y")
         self.side.pack_propagate(False)
         self.holder = tk.Frame(body, bg=T.bg)
@@ -1260,17 +1260,34 @@ class App(tk.Tk):
         f = tk.Frame(self.main, bg=T.bg)
         f.pack(fill="x", pady=(14, 0))
         ttk.Button(f, text="Copy diagnostics", command=self.copy_diagnostics).pack(side="left")
-        tk.Label(f, text="Text for a bug report: program and helper versions, Windows, what went wrong last. It leaves out your folder names and user name.",
+        tk.Label(f, text="Text for a bug report: program and helper versions, your system, what went wrong last. It leaves out your folder names and user name.",
+                 bg=T.bg, fg=T.muted, font=(FONT, 9), wraplength=S(520), justify="left").pack(side="left", padx=12)
+        f = tk.Frame(self.main, bg=T.bg)
+        f.pack(fill="x", pady=(10, 0))
+        self.selftest_btn = ttk.Button(f, text="Run self-test", command=self.run_selftest)
+        self.selftest_btn.pack(side="left")
+        tk.Label(f, text="Makes and takes apart a few tiny test files with the helper programs (about a minute) and shows what worked. "
+                         "Afterwards you can copy the result, with the diagnostics, for a bug report.",
                  bg=T.bg, fg=T.muted, font=(FONT, 9), wraplength=S(520), justify="left").pack(side="left", padx=12)
 
+    @staticmethod
+    def scrub_private(text):
+        """the text without this PC's private names: the program's folder, the home folder, the temp folder and the user name"""
+        import getpass
+        try:
+            user = getpass.getuser()
+        except Exception:
+            user = ""
+        for real, shown in ((paths.app_dir(), "<program>"), (tempfile.gettempdir(), "<temp>"), (os.path.expanduser("~"), "<home>"),
+                            (os.environ.get("USERNAME", ""), "<user>"), (os.environ.get("USER", ""), "<user>"), (user, "<user>")):
+            if real and len(real) > 2:
+                text = text.replace(real, shown).replace(real.replace("\\", "/"), shown)
+        return text
+
     def diagnostics_text(self):
-        def scrub(text):
-            for real, shown in ((paths.app_dir(), "<program>"), (os.path.expanduser("~"), "<home>"), (os.environ.get("USERNAME", ""), "<user>")):
-                if real and len(real) > 2:
-                    text = text.replace(real, shown).replace(real.replace("\\", "/"), shown)
-            return text
+        scrub = self.scrub_private
         lines = ["PMF Studio %s %s (%s)" % (VERSION, STAGE, "exe" if getattr(sys, "frozen", False) else "from source"),
-                 "Windows: %s" % platform.platform(), "Python %s, Tk %s, screen scale %.2f" % (platform.python_version(), tk.TkVersion, T.scale)]
+                 "System: %s" % platform.platform(), "Python %s, Tk %s, screen scale %.2f" % (platform.python_version(), tk.TkVersion, T.scale)]
         for name, (path, text) in getattr(self, "tool_status", {}).items():
             lines.append("%s: %s" % (name, text if path else "not found"))
         try:
@@ -1290,6 +1307,79 @@ class App(tk.Tk):
         self.clipboard_clear()
         self.clipboard_append(self.diagnostics_text())
         messagebox.showinfo("PMF Studio", "Copied. Paste it into your bug report.")
+
+    def run_selftest(self):
+        """the program's own self-test (what `PMF Studio --selftest` does) in a small window; the result comes back with a Copy report button"""
+        if self.busy or getattr(self, "selftesting", False) or getattr(self, "updating", False):
+            messagebox.showinfo("PMF Studio", "PMF Studio is busy. Run the self-test when it is done.")
+            return
+        self.selftesting = True
+        win = tk.Toplevel(self)
+        win.title("Self-test")
+        win.configure(bg=T.bg)
+        win.transient(self)
+        win.resizable(False, False)
+        tk.Label(win, text="Running the self-test. It takes about a minute.", bg=T.bg, fg=T.ink, font=(FONT, 10), width=56, anchor="w").pack(padx=22, pady=(20, 8))
+        bar = ProgressBar(win, height=10)
+        bar.pack(fill="x", padx=22, pady=(0, 20))
+        win.protocol("WM_DELETE_WINDOW", lambda: None)                      # it can't be stopped halfway: it only writes into its own temporary folder
+        win.update_idletasks()
+        win.geometry("+%d+%d" % (max(self.winfo_rootx() + (self.winfo_width() - win.winfo_width()) // 2, 0), self.winfo_rooty() + 140))
+        win.grab_set()
+        bar.indeterminate()
+        self.selftest_ui = win
+
+        def work():
+            cmd = [sys.executable] + ([] if getattr(sys, "frozen", False) else ["-m", "pmfstudio"]) + ["--selftest"]
+            env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
+            env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+            result = os.path.join(app_dir(), "selftest_result.txt")
+            try:
+                os.remove(result)
+            except OSError:
+                pass
+            try:
+                subprocess.run(cmd, cwd=app_dir(), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=600,
+                               creationflags=0x08000000 if os.name == "nt" else 0)
+                text = open(result, encoding="utf8", errors="replace").read() if os.path.exists(result) else "The self-test wrote no result."
+            except (OSError, subprocess.SubprocessError) as e:
+                text = "The self-test could not be run (%s)." % str(e)[:120]
+            self.q.put(("selftest", text))
+        threading.Thread(target=work, daemon=True).start()
+
+    def selftest_finished(self, text):
+        """shows the self-test result and lets the user copy it (with the diagnostics, without private names) for a bug report"""
+        self.selftesting = False
+        old = getattr(self, "selftest_ui", None)
+        if self.alive(old):
+            old.grab_release()
+            old.destroy()
+        text = self.scrub_private(text.strip())
+        good = "SELFTEST OK" in text
+        win = tk.Toplevel(self)
+        win.title("Self-test result")
+        win.configure(bg=T.bg)
+        win.transient(self)
+        tk.Label(win, text="The self-test passed." if good else "The self-test found a problem.", bg=T.bg, fg=OK if good else BAD, font=(FONT, 11, "bold"),
+                 anchor="w").pack(fill="x", padx=18, pady=(16, 6))
+        box = tk.Text(win, width=78, height=min(max(text.count("\n") + 2, 6), 22), bg=T.side, fg=T.ink, font=("Consolas" if os.name == "nt" else "DejaVu Sans Mono", 9),
+                      relief="flat", wrap="word")
+        box.insert("1.0", text)
+        box.configure(state="disabled")
+        box.pack(fill="both", expand=True, padx=18)
+
+        def copy():
+            self.clipboard_clear()
+            self.clipboard_append(self.diagnostics_text() + "\n\nSelf-test:\n" + text)
+            note.configure(text="Copied. Paste it into your bug report.")
+        row = tk.Frame(win, bg=T.bg)
+        row.pack(fill="x", padx=18, pady=14)
+        ttk.Button(row, text="Copy report", command=copy).pack(side="left")
+        ttk.Button(row, text="Close", command=win.destroy).pack(side="left", padx=8)
+        note = tk.Label(row, text="", bg=T.bg, fg=T.muted, font=(FONT, 9))
+        note.pack(side="left", padx=8)
+        win.update_idletasks()
+        win.geometry("+%d+%d" % (max(self.winfo_rootx() + (self.winfo_width() - win.winfo_width()) // 2, 0), self.winfo_rooty() + 60))
 
     def change_look(self):
         self.set_option("dark", self.vars["look"].get() == "dark")
@@ -1413,6 +1503,8 @@ class App(tk.Tk):
                     if data[1]:
                         self.sound_secs[data[0]] = data[1]
                     self.trim_recompute()
+                elif kind == "selftest":
+                    self.selftest_finished(data)
                 elif kind == "upd_progress":
                     self.update_progress(*data)
                 elif kind == "upd_done":
