@@ -57,7 +57,7 @@ def _x11():
     return x
 
 
-def drag(files, target_window, result):
+def drag(files, target_window, result, at=(50, 50)):
     """the file manager's side of a drop; fills `result` with what happened"""
     x = _x11()
     dpy = x.XOpenDisplay(None)
@@ -92,9 +92,10 @@ def drag(files, target_window, result):
 
     try:
         send("XdndEnter", 5 << 24, uri_list)
-        send("XdndPosition", 0, (50 << 16) | 50, 0, atom("XdndActionCopy"))
+        send("XdndPosition", 0, (at[0] << 16) | at[1], 0, atom("XdndActionCopy"))
         status = wait_for("XdndStatus", 4)
         result["accepted"] = bool(status is not None and status.l[1] & 1)
+        result["status"] = None if status is None else list(status.l)
         if status is None:
             return
         send("XdndDrop", 0, 0)
