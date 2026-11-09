@@ -6,8 +6,8 @@
     python packaging/build_release.py --appimage (Linux) also make the AppImage from the folder that was just built and tested
 
 What it does, in order:
-  1. gets FFmpeg (pinned in packaging/ffmpeg_pin.json for Windows and packaging/ffmpeg_pin_linux.json for Linux; the download is checked
-     against the pinned SHA-256 and against the hash the publisher lists (GitHub's digest for Windows, the site's MD5 for Linux))
+  1. gets FFmpeg: on Windows pinned in packaging/ffmpeg_pin.json (the download is checked against the pinned SHA-256 and the one GitHub
+     publishes); on Linux tools/ffmpeg built from official source by packaging/linux/build_ffmpeg.sh, with its licence texts
      - nothing from the internet is trusted without a check;
   2. packs the program with PyInstaller (one folder, no console window);
   3. puts the helper programs (ffmpeg and atracdenc) in tools/, with the licences and the atracdenc source patches;
@@ -35,7 +35,7 @@ sys.path.insert(0, ROOT)
 from pmfstudio import VERSION, STAGE                       # noqa: E402
 
 WINDOWS = os.name == "nt"
-PIN = os.path.join(ROOT, "packaging", "ffmpeg_pin.json" if WINDOWS else "ffmpeg_pin_linux.json")
+PIN = os.path.join(ROOT, "packaging", "ffmpeg_pin.json")                    # Windows only: the Linux ffmpeg is built from source
 APPIMAGE_PIN = os.path.join(ROOT, "packaging", "appimage_pin.json")
 CACHE = os.path.join(ROOT, "packaging", "cache")
 BUILD = os.path.join(ROOT, "build")
@@ -83,7 +83,26 @@ def published_digest(pin):
     return None
 
 
+LINUX_FFMPEG = os.path.join(ROOT, "tools", "ffmpeg")
+LINUX_FFMPEG_LICENCES = os.path.join(ROOT, "packaging", "linux", "ffmpeg-licenses")
+
+
+def linux_ffmpeg():
+    """Linux: the ffmpeg is built from source by packaging/linux/build_ffmpeg.sh (nothing is downloaded here) -> (its path, a description)"""
+    if not os.path.isfile(LINUX_FFMPEG) or not os.path.isdir(LINUX_FFMPEG_LICENCES):
+        sys.exit("tools/ffmpeg is missing: build it first with packaging/linux/build_ffmpeg.sh (see setup_build_env.sh)")
+    with open(LINUX_FFMPEG, "rb") as f:
+        if f.read(4) != b"\x7fELF":
+            sys.exit("tools/ffmpeg is not a Linux program")
+    digest = sha256(LINUX_FFMPEG)
+    say("FFmpeg for Linux: our own build, SHA-256 %s" % digest)
+    return LINUX_FFMPEG, dict(version="9.0.2", asset="built from source by packaging/linux/build_ffmpeg.sh",
+                              url="the source is the release file PMF-Studio-ffmpeg-source.tar.xz", sha256=digest)
+
+
 def fetch_ffmpeg():
+    if not WINDOWS:
+        return linux_ffmpeg()
     pin = json.load(open(PIN, encoding="utf8"))
     os.makedirs(CACHE, exist_ok=True)
     zpath = os.path.join(CACHE, pin["asset"])
@@ -119,15 +138,11 @@ def unpack_ffmpeg(zpath, dest_tools, dest_lic):
                 if name:
                     open(os.path.join(dest_lic, target), "wb").write(z.read(name))
         return
-    with tarfile.open(zpath, "r:xz") as t:                       # Linux: ffmpeg, the GPL text and the build's readme sit in one top folder
-        members = {os.path.basename(m.name): m for m in t.getmembers() if m.isfile() and m.name.count("/") == 1}
-        out = os.path.join(dest_tools, "ffmpeg")
-        with t.extractfile(members["ffmpeg"]) as src, open(out, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-        os.chmod(out, 0o755)
-        for source, target in (("GPLv3.txt", "ffmpeg-LICENSE.txt"), ("readme.txt", "ffmpeg-README.txt")):
-            if source in members:
-                open(os.path.join(dest_lic, target), "wb").write(t.extractfile(members[source]).read())
+    out = os.path.join(dest_tools, "ffmpeg")                       # Linux: our own build, and the licence texts of everything inside it
+    shutil.copyfile(zpath, out)
+    os.chmod(out, 0o755)
+    for name in sorted(os.listdir(LINUX_FFMPEG_LICENCES)):
+        shutil.copy(os.path.join(LINUX_FFMPEG_LICENCES, name), os.path.join(dest_lic, name))
 
 
 def pyinstaller():
