@@ -250,7 +250,8 @@ def selftest():
 
 PERSONAL_MAIL = re.compile(rb"[A-Za-z0-9._%+-]+@(?:gmail|googlemail|outlook|hotmail|live|yahoo|icloud|proton|protonmail)\.[a-z]{2,}", re.I)
 # public author lines in Python's own io module (CPython source), carried inside python312.dll and base_library.zip
-KNOWN_MAIL = {b"mike.verdone@gmail.com", b"amauryfa@gmail.com"}
+KNOWN_MAIL = {b"mike.verdone@gmail.com", b"amauryfa@gmail.com",
+              b"petasisg@yahoo.gr"}                # the author line of tkdnd, in its licence text (licenses/tkdnd-LICENSE.txt)
 
 
 def scan_personal(folder=None):
