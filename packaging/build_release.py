@@ -270,7 +270,8 @@ def make_archive():
         with tarfile.open(ARCHIVE, "w:gz", compresslevel=9) as t:          # permissions are kept: the programs must stay startable
             t.add(FOLDER, arcname=NAME, filter=anonymous)
     digest = sha256(ARCHIVE)
-    open(ARCHIVE + ".sha256", "w").write("%s  %s\n" % (digest, os.path.basename(ARCHIVE)))
+    with open(ARCHIVE + ".sha256", "w", newline="\n") as f:                    # LF line ending on every system, so sha256sum -c works everywhere
+        f.write("%s  %s\n" % (digest, os.path.basename(ARCHIVE)))
     say("\n%s\n  %.1f MB\n  SHA-256 %s" % (ARCHIVE, os.path.getsize(ARCHIVE) / 1e6, digest))
 
 
@@ -326,7 +327,8 @@ def make_appimage():
         sys.exit("appimagetool failed:\n" + r.stdout[-3000:])
     os.chmod(APPIMAGE, 0o755)
     digest = sha256(APPIMAGE)
-    open(APPIMAGE + ".sha256", "w").write("%s  %s\n" % (digest, os.path.basename(APPIMAGE)))
+    with open(APPIMAGE + ".sha256", "w", newline="\n") as f:
+        f.write("%s  %s\n" % (digest, os.path.basename(APPIMAGE)))
     shutil.rmtree(appdir, ignore_errors=True)
     say("\n%s\n  %.1f MB\n  SHA-256 %s" % (APPIMAGE, os.path.getsize(APPIMAGE) / 1e6, digest))
 
