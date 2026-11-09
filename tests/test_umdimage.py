@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(HERE, "tools"))
 
 import build_umd_iso  # noqa: E402
 
-from pmfkit import atrac3p, cli, umdimage  # noqa: E402
+from pmfkit import atrac3p, cli, umdbuild, umdimage  # noqa: E402
 from pmfkit.cso import Cso, compress  # noqa: E402
 from pmfkit.demux import demux_all  # noqa: E402
 from pmfkit.mux import mux  # noqa: E402
@@ -30,14 +30,14 @@ def make_game(root, files, shared=()):
     game = os.path.join(root, "game")
     lines, lba, where = [], 50, {}
     for path, data in files.items():
-        full = game + path
+        full = umdbuild.host(game, path)
         os.makedirs(os.path.dirname(full), exist_ok=True)
         open(full, "wb").write(data)
         where[path] = lba
         lines.append((lba, path))
         lba += max(1, -(-len(data) // SECTOR)) if data else 0
     for name, other in shared:
-        full = game + name
+        full = umdbuild.host(game, name)
         os.makedirs(os.path.dirname(full), exist_ok=True)
         open(full, "wb").write(files[other])
         lines.append((where[other], name))
@@ -119,7 +119,7 @@ class BuilderTests(unittest.TestCase):
         try:
             movies = umdimage.find_movies(umdimage.walk(img))
             self.assertEqual(len(movies), 1)
-            self.assertEqual([os.path.basename(e.path) for e in movies[0].entries], ["ONE.PMF", "TWO.PMF"])
+            self.assertEqual([umdimage.disc_basename(e.path) for e in movies[0].entries], ["ONE.PMF", "TWO.PMF"])
         finally:
             img.close()
 
@@ -132,7 +132,7 @@ class BuilderTests(unittest.TestCase):
 
     def test_files_that_share_a_sector_must_hold_the_same_bytes(self):
         game, lst = make_game(tempfile.mkdtemp(dir=self.dir), simple_files(), shared=[("\\PSP_GAME\\USRDIR\\FMV\\TWO.PMF", "\\PSP_GAME\\USRDIR\\FMV\\ONE.PMF")])
-        open(game + "\\PSP_GAME\\USRDIR\\FMV\\TWO.PMF", "wb").write(b"PSMF" + b"different" * 1000)
+        open(umdbuild.host(game, "\\PSP_GAME\\USRDIR\\FMV\\TWO.PMF"), "wb").write(b"PSMF" + b"different" * 1000)
         with self.assertRaises(SystemExit):
             build_umd_iso.build(game, lst, os.path.join(self.dir, "bad2.iso"), log=lambda *a: None)
 

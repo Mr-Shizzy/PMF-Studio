@@ -70,6 +70,11 @@ def read_list(path):
     return rows
 
 
+def host(folder, disc_path):
+    """the file on this PC that a disc path (backslashes, as discs write them on every system) stands for, below `folder`"""
+    return os.path.join(folder, *[part for part in disc_path.split("\\") if part])
+
+
 def sequential_list(game, first=50):
     """a file list for a folder that has none: every file after the other from sector `first`, in path order (UMD_DATA.BIN first)"""
     paths = []
@@ -80,7 +85,7 @@ def sequential_list(game, first=50):
     rows, lba = [], first
     for p in paths:
         rows.append((lba, p))
-        size = os.path.getsize(game + p)
+        size = os.path.getsize(host(game, p))
         lba += -(-size // SECTOR)
     return rows
 
@@ -119,13 +124,13 @@ def build(game, list_path, out, replace=(), template=None, log=print):
     root = Dir("", None)
     placements = []                                  # (lba, size, source path, listed path)
     for lba, p in rows:
-        orig = game + p
+        orig = host(game, p)
         if not os.path.isfile(orig):
             raise SystemExit("not in the game folder: " + p)
         src = orig
         for r in replace:
-            full = os.path.join(r, p.lstrip("\\"))
-            by_name = os.path.join(r, os.path.basename(p))
+            full = host(r, p)
+            by_name = os.path.join(r, p.split("\\")[-1])
             if os.path.isfile(full):
                 src = full
             elif "\\FMV\\" in p.upper() and os.path.isfile(by_name):

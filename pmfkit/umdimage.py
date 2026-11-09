@@ -137,6 +137,11 @@ def _dirs(img):
     return out
 
 
+def disc_basename(path):
+    """the last name of a path on the disc (the disc writes paths with backslashes on every operating system)"""
+    return path.replace("\\", "/").rsplit("/", 1)[-1]
+
+
 UPDATE_DIR = "\\PSP_GAME\\SYSDIR\\UPDATE"      # Sony's own firmware-update offer: obsolete, never wanted on custom firmware
 
 
@@ -401,10 +406,10 @@ def shrink_image(src, out, ffmpeg, atracdenc=None, ratio=0.5, sound_kbps=None, b
         for i, m in enumerate(movies):
             check_cancel()
             PROGRESS.window(0.85 * i / len(movies), 0.85 * (i + 1) / len(movies))
-            PROGRESS.report(0.0, "Movie %d of %d: %s" % (i + 1, len(movies), os.path.basename(m.name)))
+            PROGRESS.report(0.0, "Movie %d of %d: %s" % (i + 1, len(movies), disc_basename(m.name)))
             raw = m.raw(img)
             key = hashlib.sha256(raw).hexdigest()
-            names = ", ".join(os.path.basename(e.path) for e in m.entries)
+            names = ", ".join(disc_basename(e.path) for e in m.entries)
             if key in done:                                # the same movie stored twice on the disc: shrunk once, the result used for both
                 lead = done[key]
                 if lead is None:
@@ -520,7 +525,7 @@ def retrack_image(src, out, keep, others, ffmpeg=None, atracdenc=None, log=print
         for i, m in enumerate(movies):
             check_cancel()
             PROGRESS.window(0.85 * i / len(movies), 0.85 * (i + 1) / len(movies))
-            PROGRESS.report(0.0, "Movie %d of %d: %s" % (i + 1, len(movies), os.path.basename(m.name)))
+            PROGRESS.report(0.0, "Movie %d of %d: %s" % (i + 1, len(movies), disc_basename(m.name)))
             raw = m.raw(img)
             key = hashlib.sha256(raw).hexdigest()
             if key in done:
@@ -543,7 +548,7 @@ def retrack_image(src, out, keep, others, ffmpeg=None, atracdenc=None, log=print
             try:
                 new = tk.retrack(raw, keep, others, ffmpeg, atracdenc, work, short_frames)
             except (ValueError, BuildError, OSError) as e:
-                log("%s: %s" % (os.path.basename(m.name), e))
+                log("%s: %s" % (disc_basename(m.name), e))
                 done[key] = None
                 results.append(sh.ShrinkResult(m.name, m.name, m.size, m.size, "failed: %s" % e))
                 continue
@@ -555,7 +560,7 @@ def retrack_image(src, out, keep, others, ffmpeg=None, atracdenc=None, log=print
                 f.write(new)
             replacements.append(Replacement(m, p_out, len(new)))
             done[key] = (p_out, len(new))
-            log("%s: %s -> %s KB (%d tracks, %s)" % (os.path.basename(m.name), m.size // 1000, len(new) // 1000, n_tracks, others))
+            log("%s: %s -> %s KB (%d tracks, %s)" % (disc_basename(m.name), m.size // 1000, len(new) // 1000, n_tracks, others))
             results.append(sh.ShrinkResult(m.name, m.name, m.size, len(new), "%d sound tracks, others %s" % (n_tracks, others)))
         if not replacements:
             raise BuildError("None of the movies has several sound tracks, so no new game was written.")
@@ -651,11 +656,11 @@ def _verify(old, out_path, replacements, check, removal=None, files=None):
             with open(rp.path, "rb") as f:
                 wanted = f.read()
             if data[:rp.new_size] != wanted or any(data[rp.new_size:]):
-                return "a replaced movie (%s) is not what was written" % os.path.basename(rp.movie.name)
+                return "a replaced movie (%s) is not what was written" % disc_basename(rp.movie.name)
         for ent, wanted in files or []:
             data = new.read(ent.extent, -(-ent.size // SECTOR))
             if data[:len(wanted)] != wanted or any(data[len(wanted):]):
-                return "a replaced file (%s) is not what was written" % os.path.basename(ent.path)
+                return "a replaced file (%s) is not what was written" % disc_basename(ent.path)
         return None
     finally:
         new.close()

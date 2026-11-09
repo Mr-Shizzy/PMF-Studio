@@ -5,6 +5,7 @@ import os
 import platform
 import queue
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -206,7 +207,7 @@ class App(tk.Tk):
         back = paths.restore_missing_tools()
         if back:
             messagebox.showinfo("PMF Studio", "%s was missing from the tools folder (an antivirus program may have removed it), so the spare copy inside PMF Studio was put back. "
-                                "If it keeps disappearing, allow it in your antivirus program." % ", ".join(n + ".exe" for n in back))
+                                "If it keeps disappearing, allow it in your antivirus program." % ", ".join(n + paths.EXE for n in back))
         threading.Thread(target=lambda: self.q.put(("tools", paths.check_tools())), daemon=True).start()
 
     def tools_checked(self, status):
@@ -419,7 +420,7 @@ class App(tk.Tk):
         import subprocess
         r = subprocess.run([ff, "-hide_banner", "-loglevel", "error", "-ss", "%.2f" % at, "-i", path, "-frames:v", "1", "-vf",
                             "scale=96:54:force_original_aspect_ratio=decrease,pad=96:54:(ow-iw)/2:(oh-ih)/2", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
-                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=0x08000000)
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, creationflags=0x08000000 if os.name == "nt" else 0)
         return r.stdout if len(r.stdout) == 96 * 54 * 3 else bytes(96 * 54 * 3)
 
     def trim_arrived(self, token, dur, error):
@@ -1473,8 +1474,12 @@ class App(tk.Tk):
                 self.size_label.configure(text="Result: %s" % self.fmt(size) if self.mode == "gameboot" and self.vars["ctf"].get() else "Result: %s of %s" % (self.fmt(size), self.fmt(limit)))
                 self.size_bar.set(min(1.0, size / limit))
         if self.settings["open_folder"]:
+            folder = os.path.abspath(data) if os.path.isdir(data) else os.path.dirname(os.path.abspath(data))
             try:
-                os.startfile(os.path.abspath(data) if os.path.isdir(data) else os.path.dirname(os.path.abspath(data)))
+                if os.name == "nt":
+                    os.startfile(folder)
+                else:
+                    subprocess.Popen(["xdg-open", folder], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except (OSError, AttributeError):
                 pass
 

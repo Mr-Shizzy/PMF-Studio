@@ -39,8 +39,9 @@ class SafetyTests(unittest.TestCase):
         open(p, "wb").write(b"x")
         with self.assertRaises(BuildError):
             preflight.check_not_input({"eboot": p}, p)
-        with self.assertRaises(BuildError):
-            preflight.check_not_input({"eboot": p}, p.upper())          # Windows names don't care about capitals
+        if os.name == "nt":
+            with self.assertRaises(BuildError):
+                preflight.check_not_input({"eboot": p}, p.upper())      # Windows names don't care about capitals (Linux names do)
         preflight.check_not_input({"eboot": p}, os.path.join(self.dir, "copy.pbp"))
 
     def test_a_writable_folder_passes_and_leaves_nothing_behind(self):
@@ -140,13 +141,14 @@ class SpareToolTests(unittest.TestCase):
         try:
             spare, tools = os.path.join(d, "spare"), os.path.join(d, "tools")
             os.makedirs(spare)
-            open(os.path.join(spare, "atracdenc.exe"), "wb").write(b"spare copy")
-            self.assertEqual(paths.restore_spare("atracdenc", spare, tools), os.path.join(tools, "atracdenc.exe"))
-            self.assertEqual(open(os.path.join(tools, "atracdenc.exe"), "rb").read(), b"spare copy")
-            self.assertEqual(os.listdir(tools), ["atracdenc.exe"])                  # no .part file left
-            open(os.path.join(tools, "atracdenc.exe"), "wb").write(b"newer")
+            name = "atracdenc" + paths.EXE                                          # ".exe" on Windows, nothing on Linux
+            open(os.path.join(spare, name), "wb").write(b"spare copy")
+            self.assertEqual(paths.restore_spare("atracdenc", spare, tools), os.path.join(tools, name))
+            self.assertEqual(open(os.path.join(tools, name), "rb").read(), b"spare copy")
+            self.assertEqual(os.listdir(tools), [name])                             # no .part file left
+            open(os.path.join(tools, name), "wb").write(b"newer")
             self.assertIsNone(paths.restore_spare("atracdenc", spare, tools))      # something is there: never overwritten
-            self.assertEqual(open(os.path.join(tools, "atracdenc.exe"), "rb").read(), b"newer")
+            self.assertEqual(open(os.path.join(tools, name), "rb").read(), b"newer")
             self.assertIsNone(paths.restore_spare("ffmpeg", spare, tools))         # no spare for it
         finally:
             shutil.rmtree(d, ignore_errors=True)

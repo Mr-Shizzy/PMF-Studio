@@ -4,6 +4,9 @@ import shutil
 import sys
 
 
+EXE = ".exe" if os.name == "nt" else ""          # a program's file name ends in .exe on Windows only
+
+
 def app_dir():
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
@@ -12,6 +15,14 @@ def app_dir():
 
 def pid_alive(pid):
     """is a program with this process number still running (when that can't be told: yes, so nothing is deleted by mistake)"""
+    if os.name != "nt":
+        try:
+            os.kill(int(pid), 0)                                                  # signal 0 only asks whether the process exists
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError, ValueError, OverflowError):
+            return True                                                           # exists (another user's) or can't be told: keep its folder
+        return True
     try:
         import ctypes
         h = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))         # PROCESS_QUERY_LIMITED_INFORMATION
@@ -53,7 +64,7 @@ def restore_spare(name, spare_dir, tools_dir):
     """put the spare copy of a helper program back in the tools folder when the file there is gone (an antivirus program can quarantine it).
     -> the path of the restored file, or None when nothing was needed or possible"""
     import shutil
-    src, dst = os.path.join(spare_dir, name + ".exe"), os.path.join(tools_dir, name + ".exe")
+    src, dst = os.path.join(spare_dir, name + EXE), os.path.join(tools_dir, name + EXE)
     if os.path.isfile(dst) or not os.path.isfile(src):
         return None
     try:
@@ -86,9 +97,9 @@ def asset(name):
 def find_tool(name):
     """ffmpeg / atracdenc: the tools folder beside the program first, then (development) the project's own copies, then PATH."""
     base = app_dir()
-    candidates = [os.path.join(base, "tools", name + ".exe"), os.path.join(base, name + ".exe"),
-                  os.path.join(base, "tools", name, "bin", name + ".exe"),
-                  os.path.join(base, "Things to refrence", "pmftools", "tools", name + ".exe")]
+    candidates = [os.path.join(base, "tools", name + EXE), os.path.join(base, name + EXE),
+                  os.path.join(base, "tools", name, "bin", name + EXE),
+                  os.path.join(base, "Things to refrence", "pmftools", "tools", name + EXE)]
     for c in candidates:
         if os.path.isfile(c):
             return c

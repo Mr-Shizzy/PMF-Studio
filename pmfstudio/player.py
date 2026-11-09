@@ -27,7 +27,7 @@ from pmfkit.h264 import split_access_units, _nal_spans
 
 FPS = 30000 / 1001
 RATE = 44100
-NOWND = 0x08000000                                       # CREATE_NO_WINDOW
+NOWND = 0x08000000 if os.name == "nt" else 0                 # CREATE_NO_WINDOW
 
 
 # ---------------------------------------------------------------- sound (Windows wave-out)
