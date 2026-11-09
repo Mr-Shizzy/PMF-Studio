@@ -58,6 +58,13 @@ def pump(seconds):
         time.sleep(0.02)
 
 
+def pick_part(start, length):
+    """a gameboot is about 2.5 seconds: drag the block on the strip to a part of that length (the same call the mouse makes)"""
+    a.trim["bar"].set_selection(start, start + length)
+    a.trim_changed(start, start + length)
+    pump(0.5)
+
+
 def finish_job(limit=120):
     t = time.time()
     while a.busy and time.time() - t < limit:
@@ -82,6 +89,7 @@ def snap(name):
 a.show("gameboot")
 a.vars["movie"].set(longer)
 pump(9)
+pick_part(14.0, 2.4)
 snap("gameboot-long-movie")
 
 # 2. Gameboot, built for real from the short movie
@@ -89,6 +97,7 @@ a.show("gameboot")
 a.vars["movie"].set(movie)
 a.vars["out"].set(os.path.join(SAMPLES, "sample gameboot.pmf"))
 pump(4)
+pick_part(3.0, 2.4)
 a.run_gameboot()
 finish_job()
 snap("gameboot-built")
@@ -155,6 +164,7 @@ a.build_ui()
 a.show("gameboot")
 a.vars["movie"].set(longer)
 pump(9)
+pick_part(14.0, 2.4)
 snap("gameboot-light")
 a.quit_app()
 print("done ->", OUT)

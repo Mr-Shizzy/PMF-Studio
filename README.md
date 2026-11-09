@@ -7,7 +7,7 @@ Its movie engine (`pmfkit`, standard library only) can also be used on its own f
 
 More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/screenshots/eboot-icon.png),
 [Shrink game movies](docs/screenshots/shrink.png), [AT3 Tools](docs/screenshots/at3-tools.png), [Extract](docs/screenshots/extract.png), [Player](docs/screenshots/player.png),
-[light theme](docs/screenshots/gameboot-light.png). The pictures were made with made-up sample files.
+[light theme](docs/screenshots/gameboot-light.png). The pictures were made with made-up sample files and a short video of the author's own.
 
 ## What it does
 
