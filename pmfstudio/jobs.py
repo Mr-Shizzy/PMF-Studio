@@ -53,6 +53,8 @@ def gameboot(v, tools, emit):
     if v.get("sound"):
         argv += ["--audio", v["sound"]]
     if v["ctf"]:
+        if v.get("firmware"):
+            argv += ["--firmware", v["firmware"].replace(".", "")]
         if v.get("rco"):
             argv += ["--rco", v["rco"]]
         if v.get("preview"):

@@ -347,6 +347,9 @@ def cmd_gameboot(a):
     elif a.rco:
         rco_bytes = rcomod.load(open(a.rco, "rb").read())     # fails early, with an explanation, for an encrypted file
         rcomod.find_delay(rco_bytes)
+        problem = rcomod.mismatch(rco_bytes, a.firmware)
+        if problem:
+            fail(problem)
     elif seconds * 1000 > STOCK_SECONDS * 1000 + 100:
         fail("this movie is %.1f s long but the stock gameboot lasts %.1f s. Give your own decrypted opening_plugin.rco with --rco "
                  "(it is patched, the original is not touched) or trim with -t %.1f" % (seconds, STOCK_SECONDS, STOCK_SECONDS))
@@ -551,7 +554,7 @@ def main(argv=None):
     g.add_argument("--rco", help="your own DECRYPTED opening_plugin.rco (needed for movies over 2.5 s); it is patched in the CTF, never in place")
     g.add_argument("--title", help="theme title stored in the PTF (default: the input's file name)")
     g.add_argument("--author", default="")
-    g.add_argument("--firmware", default="661", help="firmware digits for the CTF marker (661 = 6.61, 660 = 6.60)")
+    g.add_argument("--firmware", default="661", help="firmware digits for the CTF marker (661 = 6.61, 660 = 6.60, 550 = 5.50 ...); a known opening_plugin.rco must belong to this firmware")
     g.add_argument("--preview", help="picture for the theme preview (default: a frame of the video)")
     g.add_argument("--ffmpeg", default="ffmpeg")
     g.add_argument("--atracdenc", help="path to atracdenc; enables sound")

@@ -20,6 +20,7 @@ from .theme import T, S, set_scale, set_theme, mix
 from .widgets import Check, FitPicker, ProgressBar, ScrollArea, Segmented, Slider, TrimBar, STATE_COLORS, clock
 from pmfkit import fit
 from pmfkit import cli
+from pmfkit import rco as rcomod
 from pmfkit.cli import BuildError, probe_seconds
 from pmfkit.gameboot import STOCK_SECONDS
 
@@ -677,13 +678,24 @@ class App(tk.Tk):
         for w in self.ctf_holder.winfo_children():
             w.destroy()
         self.row("preview", "Preview picture", types=IMAGES, enabled=on, parent=self.ctf_holder)
+        f = tk.Frame(self.ctf_holder, bg=T.bg)
+        f.pack(fill="x", pady=3)
+        self.label_cell(f, "Firmware", enabled=on)
+        fw = self.vars.setdefault("firmware", tk.StringVar(value="6.61"))
+        ttk.Combobox(f, textvariable=fw, values=[rcomod.label(x) for x in rcomod.FIRMWARES], state="readonly" if on else "disabled", width=8).pack(side="left")
+        tk.Label(f, text="the firmware your PSP runs", bg=T.bg, fg=T.muted, font=(FONT, 9)).pack(side="left", padx=10)
         self.row("rco", "Decrypted RCO", types=[("RCO files", "*.rco"), ("All files", "*.*")], enabled=on, parent=self.ctf_holder)
+        self.rco_status = tk.Label(self.ctf_holder, text="", bg=T.bg, fg=T.muted, font=(FONT, 9), anchor="w", justify="left", wraplength=S(640))
+        self.rco_status.pack(fill="x")
         if on:
-            self.note("A CTF is a theme file for CXMB. Copy it to PSP/THEME. For a movie longer than 2.5 seconds, pick your own decrypted opening_plugin.rco.", parent=self.ctf_holder)
+            self.note("A CTF is a theme file for CXMB. Copy it to PSP/THEME. For a movie longer than 2.5 seconds, pick the decrypted opening_plugin.rco "
+                      "from the same firmware as your PSP (it is only patched in a copy).", parent=self.ctf_holder)
         rco = self.vars["rco"]
         if not getattr(rco, "_hint_traced", False):
-            rco.trace_add("write", lambda *a: self.trim_recompute())            # the length hint under the strip depends on it
+            rco.trace_add("write", lambda *a: self.rco_picked())
+            fw.trace_add("write", lambda *a: self.rco_check())
             rco._hint_traced = True
+        self.rco_check()
         self.trim_recompute()
         out = self.vars["out"]
         if on and out.get().lower().endswith(".pmf"):
@@ -691,6 +703,49 @@ class App(tk.Tk):
         elif not on and out.get().lower().endswith(".ctf"):
             out.set(out.get()[:-4] + ".pmf")
         self.go.configure(text="Build CTF" if on else "Build")
+
+    def rco_file(self):
+        """-> (plain RCO bytes, None) for the file in the RCO box, (None, sentence) when it can't be used, (None, None) when there is none to look at"""
+        path = self.vars["rco"].get().strip().strip('"')
+        if not path or not os.path.isfile(path):
+            return None, None
+        try:
+            with open(path, "rb") as fh:
+                data = rcomod.load(fh.read(4_000_000))
+            rcomod.find_delay(data)
+            return data, None
+        except (ValueError, OSError) as e:
+            return None, str(e)
+
+    def rco_picked(self):
+        """a new file in the RCO box: when it is a known firmware's file, the firmware box follows it (the newest version that shares the file)"""
+        data, _ = self.rco_file()
+        group = rcomod.identify(data) if data else None
+        if group and rcomod.digits(self.vars["firmware"].get()) not in group:
+            self.vars["firmware"].set(rcomod.label(group[-1]))
+        self.rco_check()
+        self.trim_recompute()
+
+    def rco_check(self):
+        lab = getattr(self, "rco_status", None)
+        if lab is None or not self.alive(lab):
+            return
+        data, problem = self.rco_file()
+        text, colour = "", T.muted
+        if not self.vars["ctf"].get():
+            pass
+        elif problem:
+            text, colour = problem, BAD
+        elif data:
+            group = rcomod.identify(data)
+            wrong = rcomod.mismatch(data, self.vars["firmware"].get())
+            if wrong:
+                text, colour = wrong, BAD
+            elif group:
+                text, colour = "This is the opening_plugin.rco of firmware %s." % rcomod.names(group), OK
+            else:
+                text = "This looks like an opening_plugin.rco, but it is not one PMF Studio knows. It will be used as it is."
+        lab.configure(text=text, fg=colour)
 
     def page_cintro(self):
         self.heading("C-Intro", "A movie for the C-Intro plugin. Any length, any size.")
@@ -1145,7 +1200,9 @@ class App(tk.Tk):
                 "Gameboot\n"
                 "The movie that plays when you start a game. Tick Create CTF to also get a theme file for CXMB: copy it to PSP/THEME and pick it in your PSP's theme settings. "
                 "A gameboot can't be much bigger than 3 MB, so PMF Studio lowers the quality until it fits. "
-                "Movies longer than 2.5 seconds need your own opening_plugin.rco, and it must be a decrypted one.\n\n"
+                "Movies longer than 2.5 seconds need your own opening_plugin.rco, decrypted, from the same firmware as your PSP. "
+                "Choose your PSP's firmware in the Firmware box; PMF Studio recognises the opening_plugin.rco of firmware 5.00 to 6.61 and tells you when the file and the firmware don't match. "
+                "The RCO you give is never changed: the longer boot is patched into a copy inside the theme.\n\n"
                 "C-Intro\n"
                 "A movie for the C-Intro plugin. There is no size limit.\n\n"
                 "Shrink game movies\n"

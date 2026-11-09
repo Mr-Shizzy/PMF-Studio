@@ -41,5 +41,34 @@ class RcoTests(unittest.TestCase):
             self.assertEqual(rco.gameboot_ms(rco.patch(r, 30000)), 30000.0, path)
 
 
+    def test_wrong_file_gets_the_plain_message(self):
+        with self.assertRaises(ValueError) as c:
+            rco.find_delay(b"\x00PRF" + bytes(100))
+        self.assertEqual(str(c.exception), "Invalid File. Please choose a decrypted opening_plugin.rco from your specific firmware version")
+
+    def test_names_and_digits(self):
+        self.assertEqual(rco.label("661"), "6.61")
+        self.assertEqual(rco.digits("6.61"), "661")
+        self.assertEqual(rco.names(("660", "661")), "6.60 or 6.61")
+        self.assertEqual(rco.names(("620", "635", "639")), "6.20, 6.35 or 6.39")
+
+    @unittest.skipUnless(BASES, "CTFtool base files not present")
+    def test_known_files_are_recognised_and_mismatches_refused(self):
+        seen = {}
+        for path in BASES:
+            fw = os.path.basename(os.path.dirname(path))
+            r = rco.load(open(path, "rb").read())
+            group = rco.identify(r)
+            self.assertIsNotNone(group, path)
+            self.assertIn(fw, group, path)
+            seen[fw] = r
+            self.assertIsNone(rco.mismatch(r, fw))
+        self.assertIsNone(rco.mismatch(seen["660"], "6.61"))                # byte-identical files: either version is right
+        self.assertIn("6.60 or 6.61", rco.mismatch(seen["661"], "5.50"))
+        self.assertIn("5.00 or 5.50", rco.mismatch(seen["500"], "6.61"))
+        self.assertIsNone(rco.mismatch(seen["661"], "3.71"))               # no known file for 3.71: not judged
+        self.assertIsNone(rco.mismatch(rco.patch(seen["661"], 30000), "5.50"))   # a file that isn't a known one is not judged
+
+
 if __name__ == "__main__":
     unittest.main()
