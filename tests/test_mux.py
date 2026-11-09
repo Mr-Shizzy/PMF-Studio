@@ -44,7 +44,7 @@ class StillSceneIsNeverLate(unittest.TestCase):
         import shutil, subprocess, tempfile
         from pmfkit import cli, mux as muxmod
         ffmpeg = shutil.which("ffmpeg")
-        atrac = next((p for p in (os.path.join(ROOT, "tools", "atracdenc", "bin", "atracdenc.exe"), shutil.which("atracdenc") or "") if p and os.path.isfile(p)), None)
+        atrac = next((p for p in (os.path.join(ROOT, "tools", "atracdenc", "bin", "atracdenc" + (".exe" if os.name == "nt" else "")), shutil.which("atracdenc") or "") if p and os.path.isfile(p)), None)
         if not (ffmpeg and atrac):
             self.skipTest("ffmpeg / atracdenc not available")
         tmp = tempfile.mkdtemp(prefix="pmfstill_")
@@ -153,7 +153,7 @@ class StillTailIsSplitLikeSony(unittest.TestCase):
         if not os.path.exists(game):
             self.skipTest("oracle game not present")
         img = umdimage.Image(game)
-        found = [m for m in umdimage.find_movies(umdimage.walk(img)) if os.path.basename(m.name).lower() == "sector01.pmf"]
+        found = [m for m in umdimage.find_movies(umdimage.walk(img)) if umdimage.disc_basename(m.name).lower() == "sector01.pmf"]
         if not found:
             self.skipTest("movie not in the image")
         raw = found[0].raw(img)

@@ -1,0 +1,11 @@
+{
+  "source": "John Van Sickle static builds (https://johnvansickle.com/ffmpeg/), GPLv3, includes libx264",
+  "version": "7.0.2",
+  "arch": "amd64",
+  "asset": "ffmpeg-7.0.2-amd64-static.tar.xz",
+  "url": "https://johnvansickle.com/ffmpeg/releases/ffmpeg-7.0.2-amd64-static.tar.xz",
+  "size": 41888096,
+  "sha256": "abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67",
+  "md5_published": "7fa72b652e19bf84c9461e332ea1cdf3",
+  "note": "The site publishes only MD5 (checked: equal). The SHA-256 above was computed when the file was first downloaded and pinned here."
+}

@@ -65,3 +65,7 @@ tools/analysis/
 CODEX_QUESTIONS.md
 notes_backup/
 CODEX_PMF_STUDIO_IMPORT.md
+
+# Linux helper programs (downloaded by the build, never committed)
+tools/ffmpeg
+tools/ffprobe

@@ -9,7 +9,7 @@ from pmfkit.demux import demux, duration_seconds
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FFMPEG = shutil.which("ffmpeg")
-ATRAC = next((p for p in (os.path.join(HERE, "tools", "atracdenc", "bin", "atracdenc.exe"), shutil.which("atracdenc") or "") if p and os.path.isfile(p)), None)
+ATRAC = next((p for p in (os.path.join(HERE, "tools", "atracdenc", "bin", "atracdenc" + (".exe" if os.name == "nt" else "")), shutil.which("atracdenc") or "") if p and os.path.isfile(p)), None)
 
 
 class FindMoviesTests(unittest.TestCase):
