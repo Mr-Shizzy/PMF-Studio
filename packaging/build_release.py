@@ -263,8 +263,12 @@ def make_archive():
                     p = os.path.join(dp, f)
                     z.write(p, os.path.join(NAME, os.path.relpath(p, FOLDER)))
     else:
+        def anonymous(info):                                             # no builder name or number inside the archive
+            info.uid = info.gid = 0
+            info.uname = info.gname = "root"
+            return info
         with tarfile.open(ARCHIVE, "w:gz", compresslevel=9) as t:          # permissions are kept: the programs must stay startable
-            t.add(FOLDER, arcname=NAME)
+            t.add(FOLDER, arcname=NAME, filter=anonymous)
     digest = sha256(ARCHIVE)
     open(ARCHIVE + ".sha256", "w").write("%s  %s\n" % (digest, os.path.basename(ARCHIVE)))
     say("\n%s\n  %.1f MB\n  SHA-256 %s" % (ARCHIVE, os.path.getsize(ARCHIVE) / 1e6, digest))
