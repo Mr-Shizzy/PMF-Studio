@@ -850,7 +850,7 @@ class App(tk.Tk):
 
     def pick_shrink_out(self):
         if self.shrink_is_game():
-            self.pick("out", "save", [("Game image (.cso is smaller)", "*.cso *.iso")])
+            self.pick("out", "save", [("CSO: compressed, smaller", "*.cso"), ("ISO: not compressed", "*.iso")])
         else:
             self.pick("out", "dir", None)
 
