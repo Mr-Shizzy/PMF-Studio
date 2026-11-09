@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -23,8 +24,12 @@ import zipfile
 from . import VERSION, STAGE, REPO
 
 PREFIX = "https://github.com/%s/" % REPO
-ASSET = re.compile(r"PMF-Studio-.+-win64\.zip")
-EXE = "PMF Studio.exe"
+WINDOWS = os.name == "nt"
+# each system has its own release file: a zip for Windows, a tar.gz for Linux (the AppImage is a separate download that replaces itself by hand)
+ASSET = re.compile(r"PMF-Studio-.+-win64\.zip" if WINDOWS else r"PMF-Studio-.+-linux-x64\.tar\.gz")
+EXE = "PMF Studio.exe" if WINDOWS else "PMF Studio"
+HELPERS = ("ffmpeg.exe", "atracdenc.exe") if WINDOWS else ("ffmpeg", "atracdenc")
+PROGRAM_MAGIC = b"MZ" if WINDOWS else b"\x7fELF"
 PARTS = ("_internal", "tools", "licenses", "source")                       # folders that belong to the program (swapped as a whole)
 PART_FILES = (EXE, "LICENSE", "THIRD_PARTY_NOTICES.txt", "README.txt")      # files that belong to the program
 KEEP = ("Output", "temp", "PMF Studio settings.json", "selftest_result.txt", "update_log.txt", "update_result.txt")      # never copied from an update, never removed
@@ -122,35 +127,62 @@ def unpack(zip_path, staging):
     shutil.rmtree(staging, ignore_errors=True)
     os.makedirs(staging)
     root = os.path.realpath(staging)
+
+    def inside(path):
+        target = os.path.realpath(path)
+        return target == root or target.startswith(root + os.sep)
+
+    odd = "The update file has an entry in an odd place (%s), so it was not used."
     try:
-        with zipfile.ZipFile(zip_path) as z:
-            infos = z.infolist()
-            if len(infos) > MAX_ENTRIES or sum(i.file_size for i in infos) > MAX_UNPACKED:
-                raise UpdateError("The update file is larger than expected, so it was not used.")
-            for i in infos:
-                target = os.path.realpath(os.path.join(staging, i.filename))
-                if not (target == root or target.startswith(root + os.sep)) or i.filename.startswith(("/", "\\")) or ":" in i.filename:
-                    raise UpdateError("The update file has an entry in an odd place (%s), so it was not used." % i.filename[:60])
-            z.extractall(staging)
-    except zipfile.BadZipFile:
+        if str(zip_path).endswith((".tar.gz", ".tgz")):
+            with tarfile.open(zip_path, "r:gz") as t:
+                members = t.getmembers()
+                if len(members) > MAX_ENTRIES or sum(m.size for m in members) > MAX_UNPACKED:
+                    raise UpdateError("The update file is larger than expected, so it was not used.")
+                for m in members:
+                    if m.name.startswith("/") or ".." in m.name.replace("\\", "/").split("/") or not inside(os.path.join(staging, m.name)):
+                        raise UpdateError(odd % m.name[:60])
+                    if not (m.isfile() or m.isdir() or m.issym()):          # no device files, no hard links
+                        raise UpdateError(odd % m.name[:60])
+                    if m.issym() and not inside(os.path.join(staging, os.path.dirname(m.name), m.linkname)):
+                        raise UpdateError(odd % m.name[:60])
+                try:
+                    t.extractall(staging, filter="data")
+                except TypeError:                                            # an older Python without extraction filters: the checks above still ran
+                    t.extractall(staging)
+        else:
+            with zipfile.ZipFile(zip_path) as z:
+                infos = z.infolist()
+                if len(infos) > MAX_ENTRIES or sum(i.file_size for i in infos) > MAX_UNPACKED:
+                    raise UpdateError("The update file is larger than expected, so it was not used.")
+                for i in infos:
+                    if not inside(os.path.join(staging, i.filename)) or i.filename.startswith(("/", "\\")) or ":" in i.filename:
+                        raise UpdateError(odd % i.filename[:60])
+                z.extractall(staging)
+    except (zipfile.BadZipFile, tarfile.TarError, EOFError):
         raise UpdateError("The update file is damaged. Nothing was changed.")
     tops = [d for d in os.listdir(staging) if os.path.isdir(os.path.join(staging, d))]
-    new = os.path.join(staging, tops[0]) if len(tops) == 1 and not os.path.exists(os.path.join(staging, EXE)) else staging
+    new = os.path.join(staging, tops[0]) if len(tops) == 1 and not os.path.isfile(os.path.join(staging, EXE)) else staging     # (on Linux the folder and the program share the name)
     exe = os.path.join(new, EXE)
-    needed = [exe, os.path.join(new, "_internal"), os.path.join(new, "tools", "ffmpeg.exe"), os.path.join(new, "tools", "atracdenc.exe")]
+    needed = [exe, os.path.join(new, "_internal")] + [os.path.join(new, "tools", h) for h in HELPERS]
     if not all(os.path.exists(p) for p in needed):
         raise UpdateError("The update file doesn't contain a complete PMF Studio, so it was not used.")
     with open(exe, "rb") as f:
-        if f.read(2) != b"MZ":
-            raise UpdateError("The program in the update file isn't a Windows program, so it was not used.")
+        if not f.read(4).startswith(PROGRAM_MAGIC):
+            raise UpdateError("The program in the update file isn't a program for this system, so it was not used.")
+    if not WINDOWS:
+        for p in [exe] + [os.path.join(new, "tools", h) for h in HELPERS]:      # a program that can't be started would fail only after the swap
+            if not os.access(p, os.X_OK):
+                raise UpdateError("The update file's programs can't be started on this system, so it was not used.")
     for n in KEEP:                                    # whatever a build left in there is not part of the program
         p = os.path.join(new, n)
         shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) else _remove(p)
     return new
 
 
-def selftest(new_dir, expect_tag, timeout=420, cancelled=lambda: False):
-    """run the new program's own check in its staging folder: it must pass and name the announced version"""
+def selftest(new_dir, expect_tag, timeout=420, cancelled=lambda: False, tick=None):
+    """run the new program's own check in its staging folder: it must pass and name the announced version.
+    tick(seconds so far), if given, is called about three times a second so a window can show that the check is still running"""
     result = os.path.join(new_dir, "selftest_result.txt")
     _remove(result)
     env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
@@ -167,6 +199,8 @@ def selftest(new_dir, expect_tag, timeout=420, cancelled=lambda: False):
         if time.time() - t0 > timeout:
             proc.kill()
             raise UpdateError("The new version didn't finish its own check in time, so it was not installed.")
+        if tick:
+            tick(time.time() - t0)
         time.sleep(0.3)
     text = open(result, encoding="utf8", errors="replace").read() if os.path.exists(result) else ""
     m = re.search(r"^PMF Studio (\S+)", text, re.M)
@@ -261,17 +295,88 @@ exit /b 1
 """
 
 
+SWAP_SH = r"""#!/bin/sh
+# the same swap as the Windows batch file: the two folders arrive as environment variables, never as text in this file
+NEW="$PMF_NEW"
+APP="$PMF_APP"
+LOG="$APP/update_log.txt"
+echo "[$(date)] waiting for PMF Studio (process @PID@) to close" >> "$LOG"
+waited=0
+while kill -0 @PID@ 2>/dev/null && [ "$waited" -lt 20 ]; do
+  sleep 1
+  waited=$((waited + 1))
+done
+restore() {
+  for d in @PARTS@; do
+    if [ -e "$APP/$d.old" ]; then
+      rm -rf "$APP/$d"
+      mv "$APP/$d.old" "$APP/$d"
+    fi
+  done
+  for f in @FILES@; do
+    if [ -e "$APP/$f.old" ]; then
+      rm -f "$APP/$f"
+      mv "$APP/$f.old" "$APP/$f"
+    fi
+  done
+  echo "the old version was put back" >> "$LOG"
+  cd "$APP" && nohup "$APP/@EXE@" > /dev/null 2>&1 &
+  exit 1
+}
+# 1. put the old program aside (renamed, not deleted; the new version removes the .old copies once it has run for a few seconds)
+for d in @PARTS@; do rm -rf "$APP/$d.old"; done
+for f in @FILES@; do rm -f "$APP/$f.old"; done
+bad=""
+for d in @PARTS@; do
+  if [ -e "$APP/$d" ]; then mv "$APP/$d" "$APP/$d.old" || bad=1; fi
+done
+for f in @FILES@; do
+  if [ -e "$APP/$f" ]; then mv "$APP/$f" "$APP/$f.old" || bad=1; fi
+done
+if [ -n "$bad" ]; then
+  echo "could not move the old program aside; putting back what was moved" >> "$LOG"
+  restore
+fi
+# 2. put the new program in
+if ! cp -a "$NEW"/. "$APP"/ >> "$LOG" 2>&1; then
+  echo "copying the new program failed; putting the old one back" >> "$LOG"
+  restore
+fi
+if [ ! -x "$APP/@EXE@" ]; then
+  echo "the new program is missing after the copy; putting the old one back" >> "$LOG"
+  restore
+fi
+# 3. start it
+echo "swapped in; starting the new program" >> "$LOG"
+rm -rf "$NEW"
+rmdir "$APP/update_staging" 2>/dev/null
+cd "$APP" && nohup "$APP/@EXE@" > /dev/null 2>&1 &
+rm -f "$0"
+exit 0
+"""
+
+
 class SwapScript(str):
     """the path of the batch file; it also remembers the two folders the batch file needs (handed to it as environment variables)"""
     new_dir = app_dir = ""
 
 
 def write_swap_script(new_dir, app_dir, pid=None):
-    """a batch file that waits for this program to end, swaps the program's files, starts the new version, and undoes it all if that fails"""
-    text = SWAP.format(pid=pid or os.getpid(), exe=EXE, parts=" ".join(PARTS), files=" ".join('"%s"' % f for f in PART_FILES))
-    bat = os.path.join(tempfile.gettempdir(), "pmfstudio_swap_%d.bat" % (pid or os.getpid()))
-    with open(bat, "wb") as f:
-        f.write(text.replace("\n", "\r\n").encode("ascii"))              # bytes: text mode would turn \r\n into \r\r\n; plain ASCII on purpose (see SWAP)
+    """a batch file (Windows) or shell script (Linux) that waits for this program to end, swaps the program's files, starts the new version,
+    and undoes it all if that fails"""
+    pid = pid or os.getpid()
+    if WINDOWS:
+        text = SWAP.format(pid=pid, exe=EXE, parts=" ".join(PARTS), files=" ".join('"%s"' % f for f in PART_FILES))
+        bat = os.path.join(tempfile.gettempdir(), "pmfstudio_swap_%d.bat" % pid)
+        with open(bat, "wb") as f:
+            f.write(text.replace("\n", "\r\n").encode("ascii"))          # bytes: text mode would turn \r\n into \r\r\n; plain ASCII on purpose (see SWAP)
+    else:
+        text = SWAP_SH
+        for token, value in (("@PID@", str(pid)), ("@EXE@", EXE), ("@PARTS@", " ".join(PARTS)), ("@FILES@", " ".join('"%s"' % f for f in PART_FILES))):
+            text = text.replace(token, value)
+        bat = os.path.join(tempfile.gettempdir(), "pmfstudio_swap_%d.sh" % pid)
+        with open(bat, "wb") as f:
+            f.write(text.encode("ascii"))                                # LF line endings, plain ASCII
     script = SwapScript(bat)
     script.new_dir, script.app_dir = new_dir, app_dir
     return script
@@ -289,6 +394,10 @@ def swap_environment(script):
 def run_swap(script):
     """start the batch file detached"""
     env = swap_environment(script)
+    if not WINDOWS:                                                     # a session of its own, so it outlives this program
+        subprocess.Popen(["/bin/sh", script], start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, close_fds=True, env=env)
+        return
     # a hidden console of its own (no window) and a group of its own: the batch file's helper commands (tasklist, ping, robocopy) need a
     # console, and with the DETACHED_PROCESS flag the script hung at its first one (found in testing)
     subprocess.Popen(["cmd", "/c", script], creationflags=0x08000000 | 0x00000200, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -308,6 +417,8 @@ def can_install(app_dir):
     """None when the program can replace itself here; otherwise the reason, in plain words"""
     if not getattr(sys, "frozen", False):
         return "PMF Studio is running from its source files, which can't replace themselves."
+    if os.environ.get("APPIMAGE"):
+        return "PMF Studio is running as an AppImage, which is one file and can't replace itself. Download the new AppImage from the release page."
     try:
         fd, name = tempfile.mkstemp(prefix=".update_", dir=app_dir)
         os.close(fd)
@@ -317,25 +428,39 @@ def can_install(app_dir):
     return None
 
 
+DOWNLOAD_PART, UNPACK_DONE = 0.55, 0.65               # where the bar stands when the download is over and when the unpacking is
+
+
+def test_fraction(seconds):
+    """how far the bar goes while the new version tests itself: the test has no length known in advance, so the bar moves on slowly and
+    never quite reaches the end (it takes a minute or so on a normal PC)"""
+    return UNPACK_DONE + (0.97 - UNPACK_DONE) * (1.0 - 0.5 ** (seconds / 25.0))
+
+
 def install(asset, expect_tag, app_dir, work, progress=lambda text, fraction: None, cancelled=lambda: False, opener=None):
     """the whole update up to the swap -> the path of the swap script (not started yet). Raises UpdateError; nothing is changed until the script runs."""
     free = shutil.disk_usage(app_dir).free
     if free < (asset.get("size") or 60_000_000) * 5 + 100_000_000:
         raise UpdateError("There isn't enough free space beside the program for the update (about %d MB is needed)." % (((asset.get("size") or 60_000_000) * 5 + 100_000_000) // 1_000_000))
     zip_path = os.path.join(work, asset["name"])
-    progress("Downloading the update…", 0.0)
-    download(asset, zip_path, lambda got, total: progress("Downloading the update… %d of %d MB" % (got // 1_000_000, total // 1_000_000), 0.5 * got / total), cancelled, opener)
-    progress("Unpacking…", 0.55)
+    progress("Step 1 of 3: downloading the update…", 0.0)
+    t0 = time.time()
+
+    def downloading(got, total):
+        speed = got / max(time.time() - t0, 0.001) / 1e6
+        progress("Step 1 of 3: downloading the update…  %d%%  (%d of %d MB, %.1f MB/s)" % (100 * got // total, got // 1_000_000, total // 1_000_000, speed), DOWNLOAD_PART * got / total)
+    download(asset, zip_path, downloading, cancelled, opener)
+    progress("Step 2 of 3: unpacking…", DOWNLOAD_PART)
     staging = os.path.join(app_dir, "update_staging")                      # on the same drive as the program, so the swap is a quick move
     new = unpack(zip_path, staging)
     _remove(zip_path)
-    progress("Testing the new version…", 0.65)
+    progress("Step 3 of 3: testing the new version…", UNPACK_DONE)
     try:
-        selftest(new, expect_tag, cancelled=cancelled)
+        selftest(new, expect_tag, cancelled=cancelled, tick=lambda secs: progress("Step 3 of 3: testing the new version…  %d s" % secs, test_fraction(secs)))
     except UpdateError:
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    progress("Ready", 1.0)
+    progress("Ready: restarting into the new version", 1.0)
     return write_swap_script(new, app_dir)
 
 

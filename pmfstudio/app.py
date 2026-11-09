@@ -1585,7 +1585,7 @@ class App(tk.Tk):
         win.configure(bg=T.bg)
         win.transient(self)
         win.resizable(False, False)
-        label = tk.Label(win, text="Starting\u2026", bg=T.bg, fg=T.ink, font=(FONT, 10), width=60, anchor="w")
+        label = tk.Label(win, text="Starting\u2026", bg=T.bg, fg=T.ink, font=(FONT, 10), width=72, anchor="w")
         label.pack(padx=22, pady=(20, 8))
         bar = ProgressBar(win, height=10)
         bar.pack(fill="x", padx=22)
