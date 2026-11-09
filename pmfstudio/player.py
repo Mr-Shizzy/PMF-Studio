@@ -1,8 +1,8 @@
 """The Player page: plays a PMF (or any video or sound) inside the window, or full screen.
 
 A PMF is split with pmfkit's own reader: the picture goes to ffmpeg as a plain H.264 stream and the ATRAC3plus sound is wrapped as an AT3
-file that ffmpeg decodes. Sound is played straight through the Windows wave-out API (ctypes, nothing to install), which gives an exact
-clock for the picture, instant volume changes and instant seeking. Pictures come back from ffmpeg as raw frames shown in a Label.
+file that ffmpeg decodes. Sound is played straight through the system's own sound calls (sound.py: Windows wave-out, Linux PulseAudio/PipeWire; ctypes,
+nothing to install), which gives an exact clock for the picture and instant seeking. Pictures come back from ffmpeg as raw frames shown in a Label.
 While the timeline is dragged, small preview pictures (made once, in the background) follow the knob.
 """
 import ctypes
@@ -15,9 +15,9 @@ import tempfile
 import threading
 import time
 import tkinter as tk
-from ctypes import wintypes
 from tkinter import filedialog
 
+from .sound import RATE, open_output
 from .theme import S
 from .widgets import IconButton, ProgressBar, Slider
 from pmfkit import atrac3p, snd0
@@ -26,85 +26,7 @@ from pmfkit.toolinfo import passthrough_args
 from pmfkit.h264 import split_access_units, _nal_spans
 
 FPS = 30000 / 1001
-RATE = 44100
 NOWND = 0x08000000 if os.name == "nt" else 0                 # CREATE_NO_WINDOW
-
-
-# ---------------------------------------------------------------- sound (Windows wave-out)
-class _WaveFormat(ctypes.Structure):
-    _fields_ = [("tag", wintypes.WORD), ("channels", wintypes.WORD), ("rate", wintypes.DWORD), ("bytes_per_sec", wintypes.DWORD),
-                ("align", wintypes.WORD), ("bits", wintypes.WORD), ("extra", wintypes.WORD)]
-
-
-class _WaveHeader(ctypes.Structure):
-    _fields_ = [("data", ctypes.c_void_p), ("length", wintypes.DWORD), ("recorded", wintypes.DWORD), ("user", ctypes.c_void_p),
-                ("flags", wintypes.DWORD), ("loops", wintypes.DWORD), ("next", ctypes.c_void_p), ("reserved", ctypes.c_void_p)]
-
-
-class _MMTime(ctypes.Structure):
-    _pack_ = 1
-    _fields_ = [("kind", ctypes.c_uint), ("value", ctypes.c_uint), ("pad", ctypes.c_uint)]
-
-
-class WaveOut:
-    """One output stream: play(sound, from_byte), pause, reset, volume, and how many samples have been played."""
-
-    def __init__(self):
-        self.lib = ctypes.WinDLL("winmm")
-        self.lib.waveOutOpen.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_uint, ctypes.POINTER(_WaveFormat), ctypes.c_void_p, ctypes.c_void_p, wintypes.DWORD]
-        for name in ("waveOutPrepareHeader", "waveOutUnprepareHeader", "waveOutWrite"):
-            getattr(self.lib, name).argtypes = [ctypes.c_void_p, ctypes.POINTER(_WaveHeader), ctypes.c_uint]
-        for name in ("waveOutReset", "waveOutPause", "waveOutRestart", "waveOutClose"):
-            getattr(self.lib, name).argtypes = [ctypes.c_void_p]
-        self.lib.waveOutSetVolume.argtypes = [ctypes.c_void_p, wintypes.DWORD]
-        self.lib.waveOutGetVolume.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
-        self.lib.waveOutGetPosition.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MMTime), ctypes.c_uint]
-        fmt = _WaveFormat(1, 2, RATE, RATE * 4, 4, 16, 0)
-        self.h = ctypes.c_void_p()
-        if self.lib.waveOutOpen(ctypes.byref(self.h), 0xFFFFFFFF, ctypes.byref(fmt), None, None, 0):
-            raise OSError("no sound device")
-        self.hdr = None
-        self.buf = None
-
-    def _release(self):
-        if self.hdr is not None:
-            self.lib.waveOutReset(self.h)
-            self.lib.waveOutUnprepareHeader(self.h, ctypes.byref(self.hdr), ctypes.sizeof(self.hdr))
-            self.hdr = None
-
-    def play(self, buf, offset=0):
-        """buf: a ctypes buffer holding all the 16-bit stereo sound; starts at byte `offset` (a multiple of 4)"""
-        self._release()
-        total = ctypes.sizeof(buf)
-        offset = max(0, min(offset, total)) // 4 * 4
-        if total - offset < 4:
-            return
-        self.buf = buf
-        self.hdr = _WaveHeader(ctypes.addressof(buf) + offset, total - offset)
-        self.lib.waveOutPrepareHeader(self.h, ctypes.byref(self.hdr), ctypes.sizeof(self.hdr))
-        self.lib.waveOutRestart(self.h)
-        self.lib.waveOutWrite(self.h, ctypes.byref(self.hdr), ctypes.sizeof(self.hdr))
-
-    def pause(self):
-        self.lib.waveOutPause(self.h)
-
-    def stop(self):
-        self._release()
-
-    def samples(self):
-        t = _MMTime(2)                                       # TIME_SAMPLES
-        if self.lib.waveOutGetPosition(self.h, ctypes.byref(t), ctypes.sizeof(t)) or t.kind != 2:
-            return 0
-        return t.value
-
-    def volume(self, v):
-        """0.0 to 1.0, takes effect straight away"""
-        level = int(max(0.0, min(1.0, v)) * 0xFFFF)
-        self.lib.waveOutSetVolume(self.h, level | (level << 16))
-
-    def close(self):
-        self._release()
-        self.lib.waveOutClose(self.h)
 
 
 # ---------------------------------------------------------------- the page
@@ -147,7 +69,7 @@ class Player:
         self.fs = self.fs_slider = None
         self.root = parent.winfo_toplevel()
         try:
-            self.audio = WaveOut()
+            self.audio = open_output()
         except (OSError, AttributeError):
             self.audio = None
         T = theme

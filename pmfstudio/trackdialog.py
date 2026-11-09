@@ -146,10 +146,10 @@ class TrackDialog:
         threading.Thread(target=work, daemon=True).start()
 
     def begin(self, i, data):
-        from .player import WaveOut
+        from .sound import open_output
         try:
             if self.wave is None:
-                self.wave = WaveOut()
+                self.wave = open_output()
         except OSError:
             self.stop()
             self.status.configure(text="PMF Studio found no sound device to play this on.")
