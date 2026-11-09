@@ -21,6 +21,7 @@ from .widgets import Check, FitPicker, ProgressBar, ScrollArea, Segmented, Slide
 from pmfkit import fit
 from pmfkit import cli
 from pmfkit.cli import BuildError, probe_seconds
+from pmfkit.gameboot import STOCK_SECONDS
 
 try:
     ctypes.windll.shcore.SetProcessDpiAwareness(1)         # sharp text on high-DPI screens
@@ -489,7 +490,13 @@ class App(tk.Tk):
             text = "Fits, but the picture will look soft. A shorter part (about %s or less) looks better." % clock(good)
         else:
             text = "The whole movie fits." if whole else "This part fits well."
-        self.trim_msg.configure(text=text, fg=STATE_COLORS[state] if state != "good" else OK)
+        colour = STATE_COLORS[state] if state != "good" else OK
+        if self.trim_target == "gameboot" and length > STOCK_SECONDS + 0.1 and not (self.vars.get("ctf") and self.vars["ctf"].get() and self.vars["rco"].get().strip()):
+            text += " Longer than %.1f s: the PSP stops a normal gameboot at about %.1f s. To play it all, tick Create CTF and pick your decrypted RCO, or use a part of %.1f s or less." % (
+                STOCK_SECONDS, STOCK_SECONDS, STOCK_SECONDS)
+            if state == "good":
+                colour = STATE_COLORS["soft"]
+        self.trim_msg.configure(text=text, fg=colour)
         if state == "good" or self.trim_target == "cintro":
             self.trim_fit.pack_forget()
         else:
@@ -670,9 +677,14 @@ class App(tk.Tk):
         for w in self.ctf_holder.winfo_children():
             w.destroy()
         self.row("preview", "Preview picture", types=IMAGES, enabled=on, parent=self.ctf_holder)
-        self.row("rco", "Your RCO", types=[("RCO files", "*.rco"), ("All files", "*.*")], enabled=on, parent=self.ctf_holder)
+        self.row("rco", "Decrypted RCO", types=[("RCO files", "*.rco"), ("All files", "*.*")], enabled=on, parent=self.ctf_holder)
         if on:
-            self.note("A CTF is a theme file for CXMB. Copy it to PSP/THEME. For a movie longer than 2.5 seconds, pick your own opening_plugin.rco.", parent=self.ctf_holder)
+            self.note("A CTF is a theme file for CXMB. Copy it to PSP/THEME. For a movie longer than 2.5 seconds, pick your own decrypted opening_plugin.rco.", parent=self.ctf_holder)
+        rco = self.vars["rco"]
+        if not getattr(rco, "_hint_traced", False):
+            rco.trace_add("write", lambda *a: self.trim_recompute())            # the length hint under the strip depends on it
+            rco._hint_traced = True
+        self.trim_recompute()
         out = self.vars["out"]
         if on and out.get().lower().endswith(".pmf"):
             out.set(out.get()[:-4] + ".ctf")
@@ -1172,6 +1184,8 @@ class App(tk.Tk):
         self.heading("About PMF Studio %s %s" % (VERSION, STAGE), "Make PSP movies, boot movies and AT3 sounds. Part of the coming PSP CTF Studio.")
         for k, v in (("Source and downloads", "github.com/" + REPO), ("License", "PMF Studio is free software under the GNU GPL version 3."),
                      ("Tools inside", "atracdenc (LGPL-2.1) and FFmpeg. Their notices come with the program."),
+                     ("How files are made", "PMF Studio writes the PMF movies with its own code, and makes AT3 sound with the open-source atracdenc encoder. "
+                                            "It contains no Sony code, firmware or game content; the RCO you give it stays your own file and is only patched in a copy."),
                      ("Portable", "Runs from any folder or memory stick. It saves nothing outside its own folder.")):
             f = tk.Frame(self.main, bg=T.bg)
             f.pack(fill="x", pady=3)
@@ -1428,7 +1442,7 @@ class App(tk.Tk):
     def run_gameboot(self):
         if self.trim_blocked():
             return
-        self.start(jobs.gameboot, [("movie", "your movie"), ("out", "where to save")] + ([("rco", "your opening_plugin.rco")] if self.vars["ctf"].get() and self.vars["rco"].get() else []), self.part_args())
+        self.start(jobs.gameboot, [("movie", "your movie"), ("out", "where to save")] + ([("rco", "your decrypted opening_plugin.rco")] if self.vars["ctf"].get() and self.vars["rco"].get() else []), self.part_args())
 
     def run_cintro(self):
         if self.trim_blocked():

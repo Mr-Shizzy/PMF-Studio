@@ -54,7 +54,7 @@ def route(paths, mode):
     if kind in ("audio", "at3"):
         return "at3", "sound", first, "%s: the sound." % name
     if kind == "rco":
-        return "gameboot", "rco", first, "%s: your opening_plugin.rco." % name
+        return "gameboot", "rco", first, "%s: your decrypted opening_plugin.rco." % name
     if kind == "image":
         if mode == "gameboot":
             return "gameboot", "preview", first, "%s: the theme preview picture." % name
