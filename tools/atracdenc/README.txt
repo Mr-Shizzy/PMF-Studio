@@ -43,3 +43,10 @@ The prefix-map flags keep the build folder (and so the builder's user name) out 
 (no libunwind.dll to carry along) and strips symbols. The result needs only the Windows 10 system libraries.
 Verified: this build writes byte-identical OMA files to the earlier one.
 Do not commit the built atracdenc.exe or the upstream source.
+
+Linux (used from 0.2): packaging/linux/build_atracdenc.sh does the same on Linux (git, cmake, g++ and make; no ninja, no libsndfile):
+  it clones upstream into /var/tmp/pmf_atracdenc_build, checks out BASE_COMMIT, applies ALL FOUR patches (windows-no-libsndfile.patch too:
+  it only replaces the sound-file reader, so the program has no libsndfile to carry), configures with the same flags, builds only the
+  `atracdenc` target (upstream's lib/libgha demo tools do not link statically) and copies the result to tools/atracdenc/bin/atracdenc.
+  The program is linked statically, with the GNU C library (LGPL 2.1) inside; the source and this recipe are what the LGPL asks you to be able
+  to rebuild it from. Verified: on the same sound file this build writes byte-identical OMA files to the Windows build.

@@ -1,6 +1,6 @@
 # PMF Studio
 
-Make PSP movies, boot movies and AT3 sounds on Windows. No installer and nothing else to download: unzip it and run it.
+Make PSP movies, boot movies and AT3 sounds on Windows, and (new in 0.2, experimental) on Linux. No installer and nothing else to download: unzip it and run it.
 Its movie engine (`pmfkit`, standard library only) can also be used on its own from the command line: `python -m pmfkit --help`.
 
 <p align="center"><img src="docs/screenshots/gameboot-long-movie.png" alt="Gameboot page: choosing the part of a long movie that fits" width="720"></p>
@@ -27,7 +27,8 @@ More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/s
 - **Player**: plays PMF movies and sounds inside the program, with full screen.
 - Picks the part of a long movie that fits (a strip with a block you drag), keeps the best quality the size limit allows, shows a
   progress bar for everything that takes time, light and dark themes.
-- Drag and drop: drop a movie, EBOOT.PBP, PMF, sound or folder on the window (or on the exe) and it lands in the right box.
+- Drag and drop (Windows only for now): drop a movie, EBOOT.PBP, PMF, sound or folder on the window (or on the exe) and it lands in the right box.
+- Self-test on the Options page, with a Copy report button that makes text for a bug report without your folder names or user name.
 - Stop button, checks before a job (free space, odd names, saving over your own file), working files cleaned up.
 - Updates itself when you ask: downloads the new release, verifies its SHA-256, tests it, swaps it in, and rolls back if that fails.
 - C-Intro movies of any length: written to disk a piece at a time, so a 2-hour movie needs no more memory than a 2-minute one.
@@ -35,12 +36,22 @@ More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/s
 
 ## Download and use
 
-Get the zip from the Releases page, unzip anywhere, run `PMF Studio.exe`. Windows may warn that the program isn't signed: choose
-*More info*, then *Run anyway*. The release notes list the SHA-256 of the zip.
+**Windows:** get `PMF-Studio-<version>-win64.zip` from the Releases page, unzip anywhere, run `PMF Studio.exe`. Windows may warn that the
+program isn't signed: choose *More info*, then *Run anyway*. The release notes list the SHA-256 of every file.
+
+**Linux (experimental):** get either `PMF-Studio-<version>-linux-x64.tar.gz` (unpack anywhere, run `./"PMF Studio"`) or
+`PMF-Studio-<version>-linux-x64.AppImage` (`chmod +x` it and run it; it keeps its settings and saved files beside the AppImage file, and can't
+update itself). Both are 64-bit and need a desktop with X11 or Wayland. The Linux ffmpeg is built from source by `packaging/linux/build_ffmpeg.sh`;
+its source and build script are attached to every release as `PMF-Studio-ffmpeg-source.tar.xz`.
 
 ## Status
 
 Beta. Everything was checked on one PSP (firmware 6.61 with ARK-5 and CXMB).
+
+Linux is new in 0.2 and experimental. It was tested on Ubuntu 24.04 running inside Windows (WSL2), not on a physical Linux desktop or other
+distributions: all the tests pass there, the movie writer and the sound encoder make byte-for-byte the same files as on Windows from the same
+input, the finished tar.gz and AppImage pass their self-test, and the updater was tried with a release file on disk (not against a published
+release). The player has no sound on Linux yet, and dragging files onto the window doesn't work there yet (use the Browse buttons).
 
 The movie writer follows Sony's own muxer: pack timing, the video buffer (a pack waits until it fits the buffer the movie declares) and
 the encoder's buffer limit were matched against about 85 retail movies, whose streams it reproduces byte for byte. 49 of them come out with
@@ -67,9 +78,11 @@ custom firmware) and never touches the game's XMB icon. The size limits come fro
 
 ## Running from the source
 
-Needs Python 3.12 (standard library only for the program itself), plus `ffmpeg.exe` and `atracdenc.exe` in a `tools` folder.
-Start it with `python -m pmfstudio`. Tests: `python -W ignore -m unittest discover -s tests -t .`.
-`python packaging/build_release.py` builds the release folder and zip (see the notes at the top of that file).
+Needs Python 3.12 with Tk (standard library only for the program itself), plus `ffmpeg` and `atracdenc` (`.exe` on Windows) in a `tools` folder
+or on the PATH. Start it with `python -m pmfstudio`. Tests: `python -W ignore -m unittest discover -s tests -t .`.
+`python packaging/build_release.py` builds the release folder and its archive on the system it runs on (see the notes at the top of that file;
+on Linux, `packaging/linux/` has the scripts that set up a private build environment and build ffmpeg, and `tools/atracdenc/README.txt` says how
+to build atracdenc).
 
 ## Credits
 

@@ -1,4 +1,4 @@
 """PMF Studio: a portable window around pmfkit (one module of the later PSP CTF Studio)."""
-VERSION = "0.1"
+VERSION = "0.2"
 STAGE = "beta"
-REPO = "Mr-Shizzy/PMF-Studio"            # GitHub repository checked for newer releases (not published yet)
+REPO = "Mr-Shizzy/PMF-Studio"            # GitHub repository checked for newer releases

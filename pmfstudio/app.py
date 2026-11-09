@@ -217,7 +217,7 @@ class App(tk.Tk):
             lines = "\n".join("  \u2022 %s: %s" % (n, t) for n, t in problems)
             messagebox.showwarning("PMF Studio", "PMF Studio can't use some of its helper programs:\n\n%s\n\n"
                                    "They should sit in the \"tools\" folder next to PMF Studio:\n%s\n\n"
-                                   "Start PMF Studio from the folder you unzipped, with everything in it left together (don't copy just the .exe somewhere else). "
+                                   "Start PMF Studio from the folder you unzipped, with everything in it left together (don't copy just the program file somewhere else). "
                                    "If your antivirus blocked a file, allow it and restart."
                                    % (lines, os.path.join(app_dir(), "tools")))
 
@@ -1181,8 +1181,11 @@ class App(tk.Tk):
         self.heading("Help")
         text = ("Getting started\n"
                 "Pick what you want to make on the left, choose your files, and press the button at the bottom. "
-                "Your original files are never changed. You can also drag files onto the window (or onto the PMF Studio icon): "
-                "a movie, an EBOOT.PBP, a PMF, a sound or a folder goes to the right page and box. "
+                "Your original files are never changed. "
+                + ("You can also drag files onto the window (or onto the PMF Studio icon): "
+                   "a movie, an EBOOT.PBP, a PMF, a sound or a folder goes to the right page and box. " if os.name == "nt" else
+                   "(Dragging files onto the window works on Windows only for now: use the Browse buttons.) ")
+                + 
                 "A Stop button appears while something is working.\n\n"
                 "Gameboot\n"
                 "The movie that plays when you start a game. Tick Create CTF to also get a theme file for CXMB: copy it to PSP/THEME and pick it in your PSP's theme settings. "
