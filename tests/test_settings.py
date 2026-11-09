@@ -13,7 +13,7 @@ class SettingsTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="pmfs_")
         self.app = os.path.join(self.tmp, "PMF Studio")
         os.makedirs(self.app)
-        self.patches = [mock.patch.object(settings, "app_dir", lambda: self.app),
+        self.patches = [mock.patch.object(settings, "data_dir", lambda: self.app),
                         mock.patch.object(settings, "default_output", lambda: os.path.join(self.app, "Output"))]
         for p in self.patches:
             p.start()
@@ -57,6 +57,30 @@ class SettingsTests(unittest.TestCase):
     def test_notes_are_never_written_to_the_file(self):
         settings.save({"dark": False, "output_dir": "", "_note": "temporary"})
         self.assertNotIn("_note", json.load(open(os.path.join(self.app, settings.FILE))))
+
+
+class DataDirTests(unittest.TestCase):
+    """settings, saved files and working files go beside the program, but beside the .AppImage file for an AppImage (its own folder is read-only)"""
+
+    def test_beside_the_program_normally(self):
+        from pmfstudio import paths
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("APPIMAGE", None)
+            self.assertEqual(paths.data_dir(), paths.app_dir())
+
+    def test_beside_the_appimage_file_when_running_as_one(self):
+        import sys
+        from pmfstudio import paths
+        folder = os.path.join(tempfile.gettempdir(), "My Games")
+        with mock.patch.dict(os.environ, {"APPIMAGE": os.path.join(folder, "PMF-Studio.AppImage")}), mock.patch.object(sys, "frozen", True, create=True):
+            self.assertEqual(paths.data_dir(), os.path.abspath(folder))
+            self.assertEqual(paths.default_output(), os.path.join(os.path.abspath(folder), "Output"))
+            self.assertEqual(paths.restore_missing_tools(), [])                   # a read-only AppImage is never written to
+
+    def test_the_variable_is_ignored_by_a_program_run_from_source(self):
+        from pmfstudio import paths
+        with mock.patch.dict(os.environ, {"APPIMAGE": "/elsewhere/x.AppImage"}):
+            self.assertEqual(paths.data_dir(), paths.app_dir())
 
 
 class ToolInfoTests(unittest.TestCase):

@@ -1,19 +1,23 @@
-"""Builds the PMF Studio release: a folder (and a zip) that works on a PC with nothing installed.
+"""Builds the PMF Studio release: a folder (and a zip on Windows, a tar.gz and an AppImage on Linux) that works on a PC with nothing installed.
 
-    python packaging/build_release.py            build everything, check it, zip it
-    python packaging/build_release.py --no-zip   stop before zipping
-    python packaging/build_release.py --zip-only zip the folder that was just built and tested
+    python packaging/build_release.py            build everything, check it, pack it
+    python packaging/build_release.py --no-zip   stop before packing
+    python packaging/build_release.py --zip-only pack the folder that was just built and tested
+    python packaging/build_release.py --appimage (Linux) also make the AppImage from the folder that was just built and tested
 
 What it does, in order:
-  1. gets FFmpeg (pinned version in packaging/ffmpeg_pin.json; the download is checked against the SHA-256 GitHub publishes for it,
-     and, once known, against the hash pinned in that file) - nothing from the internet is trusted without a check;
+  1. gets FFmpeg (pinned in packaging/ffmpeg_pin.json for Windows and packaging/ffmpeg_pin_linux.json for Linux; the download is checked
+     against the pinned SHA-256 and against the hash the publisher lists (GitHub's digest for Windows, the site's MD5 for Linux))
+     - nothing from the internet is trusted without a check;
   2. packs the program with PyInstaller (one folder, no console window);
-  3. puts the helper programs (ffmpeg.exe, atracdenc.exe) in tools\\, with the licences and the atracdenc source patches;
+  3. puts the helper programs (ffmpeg and atracdenc) in tools/, with the licences and the atracdenc source patches;
   4. runs the finished program's own --selftest;
   5. checks that no personal strings (this PC's user name) ended up in the release;
-  6. zips it and prints the SHA-256.
+  6. packs it and prints the SHA-256.
 Third-party programs are never committed; they only appear in the release folder. Needs: Python 3.12 with PyInstaller installed
-(pip install pyinstaller) and tools\\atracdenc\\bin\\atracdenc.exe built as described in tools\\atracdenc\\README.txt.
+(pip install pyinstaller) and tools/atracdenc/bin/atracdenc(.exe) built as described in tools/atracdenc/README.txt.
+Linux: the same script, run on Linux (it cannot cross-build). The AppImage step downloads appimagetool and its runtime, both pinned
+in packaging/appimage_pin.json and checked.
 """
 import hashlib
 import json
@@ -22,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.request
 import zipfile
 
@@ -29,13 +34,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from pmfstudio import VERSION, STAGE                       # noqa: E402
 
-PIN = os.path.join(ROOT, "packaging", "ffmpeg_pin.json")
+WINDOWS = os.name == "nt"
+PIN = os.path.join(ROOT, "packaging", "ffmpeg_pin.json" if WINDOWS else "ffmpeg_pin_linux.json")
+APPIMAGE_PIN = os.path.join(ROOT, "packaging", "appimage_pin.json")
 CACHE = os.path.join(ROOT, "packaging", "cache")
 BUILD = os.path.join(ROOT, "build")
 RELEASE = os.path.join(ROOT, "release")
 NAME = "PMF Studio"
 FOLDER = os.path.join(RELEASE, NAME)
-ZIP = os.path.join(RELEASE, "PMF-Studio-%s-%s-win64.zip" % (VERSION, STAGE))
+EXE = ".exe" if WINDOWS else ""
+PROGRAM = NAME + EXE
+ARCHIVE = os.path.join(RELEASE, "PMF-Studio-%s-%s-%s" % (VERSION, STAGE, "win64.zip" if WINDOWS else "linux-x64.tar.gz"))
+APPIMAGE = os.path.join(RELEASE, "PMF-Studio-%s-%s-linux-x64.AppImage" % (VERSION, STAGE))
 
 
 def say(text):
@@ -50,8 +60,18 @@ def sha256(path):
     return h.hexdigest()
 
 
+def md5(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
 def published_digest(pin):
-    """the SHA-256 GitHub lists for the pinned asset (None when it can't be read)"""
+    """the SHA-256 GitHub lists for the pinned asset (None when it can't be read, or when the pin is not a GitHub release)"""
+    if "repo" not in pin:
+        return None
     try:
         url = "https://api.github.com/repos/%s/releases/tags/%s" % (pin["repo"], pin["tag"])
         info = json.load(urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "pmf-studio-build"}), timeout=30))
@@ -76,37 +96,52 @@ def fetch_ffmpeg():
         sys.exit("FFmpeg download does not match the pinned SHA-256 - not using it.\n  pinned %s\n  got    %s" % (pin["sha256"], got))
     if published and got != published:
         sys.exit("FFmpeg download does not match the SHA-256 GitHub publishes - not using it.\n  published %s\n  got       %s" % (published, got))
+    if pin.get("md5_published") and md5(zpath) != pin["md5_published"]:
+        sys.exit("FFmpeg download does not match the MD5 its publisher lists - not using it.")
     if not pin.get("sha256"):
         pin["sha256"] = got
         json.dump(pin, open(PIN, "w", encoding="utf8"), indent=2)
-        say("pinned the SHA-256 of this download in packaging/ffmpeg_pin.json: %s (GitHub's own: %s)" % (got, published or "not available"))
+        say("pinned the SHA-256 of this download in %s: %s (publisher's own: %s)" % (os.path.basename(PIN), got, published or "not available"))
     else:
         say("FFmpeg download verified: %s" % got)
     return zpath, pin
 
 
 def unpack_ffmpeg(zpath, dest_tools, dest_lic):
-    with zipfile.ZipFile(zpath) as z:
-        names = z.namelist()
-        exe = next(n for n in names if n.endswith("/bin/ffmpeg.exe"))
-        with z.open(exe) as src, open(os.path.join(dest_tools, "ffmpeg.exe"), "wb") as out:
-            shutil.copyfileobj(src, out)
-        for suffix, target in (("/LICENSE", "ffmpeg-LICENSE.txt"), ("/README.txt", "ffmpeg-README.txt")):
-            name = next((n for n in names if n.count("/") == 1 and n.endswith(suffix)), None)
-            if name:
-                open(os.path.join(dest_lic, target), "wb").write(z.read(name))
+    if WINDOWS:
+        with zipfile.ZipFile(zpath) as z:
+            names = z.namelist()
+            exe = next(n for n in names if n.endswith("/bin/ffmpeg.exe"))
+            with z.open(exe) as src, open(os.path.join(dest_tools, "ffmpeg.exe"), "wb") as out:
+                shutil.copyfileobj(src, out)
+            for suffix, target in (("/LICENSE", "ffmpeg-LICENSE.txt"), ("/README.txt", "ffmpeg-README.txt")):
+                name = next((n for n in names if n.count("/") == 1 and n.endswith(suffix)), None)
+                if name:
+                    open(os.path.join(dest_lic, target), "wb").write(z.read(name))
+        return
+    with tarfile.open(zpath, "r:xz") as t:                       # Linux: ffmpeg, the GPL text and the build's readme sit in one top folder
+        members = {os.path.basename(m.name): m for m in t.getmembers() if m.isfile() and m.name.count("/") == 1}
+        out = os.path.join(dest_tools, "ffmpeg")
+        with t.extractfile(members["ffmpeg"]) as src, open(out, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+        os.chmod(out, 0o755)
+        for source, target in (("GPLv3.txt", "ffmpeg-LICENSE.txt"), ("readme.txt", "ffmpeg-README.txt")):
+            if source in members:
+                open(os.path.join(dest_lic, target), "wb").write(t.extractfile(members[source]).read())
 
 
 def pyinstaller():
     say("packing the program with PyInstaller")
     for d in (os.path.join(BUILD, "dist"), os.path.join(BUILD, "work")):
         shutil.rmtree(d, ignore_errors=True)
+    atrac = os.path.join(ROOT, "tools", "atracdenc", "bin", "atracdenc" + EXE)
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--onedir", "--name", NAME,
            "--distpath", os.path.join(BUILD, "dist"), "--workpath", os.path.join(BUILD, "work"), "--specpath", BUILD,
-           "--icon", os.path.join(ROOT, "pmfstudio", "assets", "icon.ico"),
            "--add-data", os.path.join(ROOT, "pmfstudio", "assets") + os.pathsep + os.path.join("pmfstudio", "assets"),
-           "--add-data", os.path.join(ROOT, "tools", "atracdenc", "bin", "atracdenc.exe") + os.pathsep + "spare",       # a spare copy, put back if the file in tools\\ is removed
+           "--add-data", atrac + os.pathsep + "spare",       # a spare copy, put back if the file in tools/ is removed
            "--paths", ROOT, "--exclude-module", "PIL", "--exclude-module", "numpy", os.path.join(ROOT, "packaging", "entry.py")]
+    if WINDOWS:
+        cmd[cmd.index("--add-data"):cmd.index("--add-data")] = ["--icon", os.path.join(ROOT, "pmfstudio", "assets", "icon.ico")]
     r = subprocess.run(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if r.returncode:
         sys.exit("PyInstaller failed:\n" + r.stdout[-3000:])
@@ -114,36 +149,51 @@ def pyinstaller():
 
 
 def atracdenc_source_files(folder):
-    """BASE_COMMIT.txt, README.txt and EVERY patch in tools\\atracdenc: the shipped atracdenc.exe is built with all of them, and its
+    """BASE_COMMIT.txt, README.txt and EVERY patch in tools/atracdenc: the shipped atracdenc is built with all of them, and its
     licence (LGPL-2.1) means the release must carry the same changes (a fixed list once left one out)"""
     patches = sorted(f for f in os.listdir(folder) if f.endswith(".patch"))
     return ["BASE_COMMIT.txt", "README.txt"] + patches
 
 
+def python_licence():
+    """the licence text of the Python the program is packed with (None when this Python's folder holds none)"""
+    for base in (sys.base_prefix, os.path.join(sys.base_prefix, "lib", "python%d.%d" % sys.version_info[:2]), os.path.dirname(os.__file__)):
+        for name in ("LICENSE.txt", "LICENSE"):
+            p = os.path.join(base, name)
+            if os.path.isfile(p):
+                return p
+    return None
+
+
 def assemble(packed, zpath, pin):
     shutil.rmtree(FOLDER, ignore_errors=True)
-    shutil.copytree(packed, FOLDER)
+    shutil.copytree(packed, FOLDER, symlinks=True)
     tools, lic, src = (os.path.join(FOLDER, d) for d in ("tools", "licenses", os.path.join("source", "atracdenc")))
     for d in (tools, lic, src):
         os.makedirs(d, exist_ok=True)
     unpack_ffmpeg(zpath, tools, lic)
     atrac = os.path.join(ROOT, "tools", "atracdenc")
-    shutil.copy(os.path.join(atrac, "bin", "atracdenc.exe"), os.path.join(tools, "atracdenc.exe"))
+    shutil.copy(os.path.join(atrac, "bin", "atracdenc" + EXE), os.path.join(tools, "atracdenc" + EXE))
     for f in atracdenc_source_files(atrac):
         shutil.copy(os.path.join(atrac, f), src)
     shutil.copy(os.path.join(ROOT, "packaging", "licenses", "atracdenc-LICENSE-LGPL-2.1.txt"), lic)
-    shutil.copy(os.path.join(sys.base_prefix, "LICENSE.txt"), os.path.join(lic, "python-LICENSE.txt"))
+    py = python_licence()
+    if py:
+        shutil.copy(py, os.path.join(lic, "python-LICENSE.txt"))
+    else:
+        say("WARNING: no Python licence file found next to this Python; add it to licenses/ by hand")
     shutil.copy(os.path.join(ROOT, "LICENSE"), FOLDER)
-    shutil.copy(os.path.join(ROOT, "packaging", "THIRD_PARTY_NOTICES.txt"), FOLDER)
-    text = open(os.path.join(ROOT, "packaging", "README_release.txt"), encoding="utf8").read().replace("%VERSION%", "%s %s" % (VERSION, STAGE))
+    suffix = "" if WINDOWS else "_linux"                    # the notices and the readme differ per system
+    shutil.copy(os.path.join(ROOT, "packaging", "THIRD_PARTY_NOTICES%s.txt" % suffix), os.path.join(FOLDER, "THIRD_PARTY_NOTICES.txt"))
+    text = open(os.path.join(ROOT, "packaging", "README_release%s.txt" % suffix), encoding="utf8").read().replace("%VERSION%", "%s %s" % (VERSION, STAGE))
     open(os.path.join(FOLDER, "README.txt"), "w", encoding="utf8").write(text)
     open(os.path.join(FOLDER, "tools", "ffmpeg-build.txt"), "w", encoding="utf8").write(
-        "FFmpeg %s, %s\nfrom %s\nSHA-256 of the download: %s\n" % (pin["tag"], pin["asset"], pin["url"], pin["sha256"]))
+        "FFmpeg %s, %s\nfrom %s\nSHA-256 of the download: %s\n" % (pin.get("tag") or pin.get("version"), pin["asset"], pin["url"], pin["sha256"]))
 
 
 def selftest():
     say("running the finished program's own self-test")
-    exe = os.path.join(FOLDER, NAME + ".exe")
+    exe = os.path.join(FOLDER, PROGRAM)
     result = os.path.join(FOLDER, "selftest_result.txt")
     if os.path.exists(result):
         os.remove(result)
@@ -156,7 +206,7 @@ def selftest():
         elif os.path.exists(leftover):
             os.remove(leftover)
     if r.returncode or "SELFTEST OK" not in text:
-        sys.exit("the self-test failed - not zipping")
+        sys.exit("the self-test failed - not packing")
 
 
 PERSONAL_MAIL = re.compile(rb"[A-Za-z0-9._%+-]+@(?:gmail|googlemail|outlook|hotmail|live|yahoo|icloud|proton|protonmail)\.[a-z]{2,}", re.I)
@@ -164,46 +214,113 @@ PERSONAL_MAIL = re.compile(rb"[A-Za-z0-9._%+-]+@(?:gmail|googlemail|outlook|hotm
 KNOWN_MAIL = {b"mike.verdone@gmail.com", b"amauryfa@gmail.com"}
 
 
-def scan_personal():
+def scan_personal(folder=None):
     """no user names, personal paths or personal mail addresses inside the release (text files, programs and Python files alike)"""
-    words = [w.encode() for w in {os.environ.get("USERNAME", ""), os.path.basename(os.path.expanduser("~"))} if len(w) > 2]
+    folder = folder or FOLDER
+    names = {os.environ.get("USERNAME", ""), os.environ.get("USER", ""), os.path.basename(os.path.expanduser("~"))}
+    words = [w.encode() for w in names if len(w) > 2]
     bad = []
-    for dp, _, files in os.walk(FOLDER):
+    for dp, _, files in os.walk(folder):
         for f in files:
             p = os.path.join(dp, f)
-            if os.path.getsize(p) > 400_000_000:
+            if os.path.islink(p) or os.path.getsize(p) > 400_000_000:
                 continue
             data = open(p, "rb").read()
             low = data.lower()
             for w in words:
                 if w.lower() in low:
-                    bad.append((os.path.relpath(p, FOLDER), w.decode(), low.count(w.lower())))
+                    bad.append((os.path.relpath(p, folder), w.decode(), low.count(w.lower())))
             for m in set(PERSONAL_MAIL.findall(data)):
                 if m.lower() in KNOWN_MAIL:
                     continue
-                bad.append((os.path.relpath(p, FOLDER), "a personal e-mail address (%s...)" % m[:3].decode("latin1"), data.count(m)))
+                bad.append((os.path.relpath(p, folder), "a personal e-mail address (%s...)" % m[:3].decode("latin1"), data.count(m)))
     return bad
 
 
-def make_zip():
-    if os.path.exists(ZIP):
-        os.remove(ZIP)
-    with zipfile.ZipFile(ZIP, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-        for dp, _, files in os.walk(FOLDER):
-            for f in files:
-                p = os.path.join(dp, f)
-                z.write(p, os.path.join(NAME, os.path.relpath(p, FOLDER)))
-    digest = sha256(ZIP)
-    open(ZIP + ".sha256", "w").write("%s  %s\n" % (digest, os.path.basename(ZIP)))
-    say("\n%s\n  %.1f MB\n  SHA-256 %s" % (ZIP, os.path.getsize(ZIP) / 1e6, digest))
+def make_archive():
+    """the zip (Windows) or the tar.gz (Linux) of the finished folder"""
+    if os.path.exists(ARCHIVE):
+        os.remove(ARCHIVE)
+    if WINDOWS:
+        with zipfile.ZipFile(ARCHIVE, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+            for dp, _, files in os.walk(FOLDER):
+                for f in files:
+                    p = os.path.join(dp, f)
+                    z.write(p, os.path.join(NAME, os.path.relpath(p, FOLDER)))
+    else:
+        with tarfile.open(ARCHIVE, "w:gz", compresslevel=9) as t:          # permissions are kept: the programs must stay startable
+            t.add(FOLDER, arcname=NAME)
+    digest = sha256(ARCHIVE)
+    open(ARCHIVE + ".sha256", "w").write("%s  %s\n" % (digest, os.path.basename(ARCHIVE)))
+    say("\n%s\n  %.1f MB\n  SHA-256 %s" % (ARCHIVE, os.path.getsize(ARCHIVE) / 1e6, digest))
+
+
+def fetch_pinned(entry):
+    """downloads one file listed in appimage_pin.json (cached) and checks it against the pinned SHA-256 -> its path"""
+    os.makedirs(CACHE, exist_ok=True)
+    path = os.path.join(CACHE, entry["asset"])
+    if not (os.path.exists(path) and sha256(path) == entry["sha256"]):
+        say("downloading %s from %s" % (entry["asset"], entry["url"]))
+        urllib.request.urlretrieve(entry["url"], path)
+    if sha256(path) != entry["sha256"]:
+        sys.exit("%s does not match its pinned SHA-256 - not using it." % entry["asset"])
+    os.chmod(path, 0o755)
+    return path
+
+
+APPRUN = """#!/bin/sh
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/PMF Studio/PMF Studio" "$@"
+"""
+DESKTOP = """[Desktop Entry]
+Type=Application
+Name=PMF Studio
+Comment=Make PSP movies, boot movies and AT3 sounds
+Exec=AppRun
+Icon=pmf-studio
+Categories=AudioVideo;Video;
+Terminal=false
+"""
+
+
+def make_appimage():
+    """the AppImage: the finished folder inside an AppDir, packed by appimagetool with a pinned runtime. It keeps its settings beside
+    the .AppImage file (paths.data_dir), never inside itself."""
+    if WINDOWS:
+        sys.exit("AppImages are made on Linux.")
+    pin = json.load(open(APPIMAGE_PIN, encoding="utf8"))
+    tool = fetch_pinned(pin["appimagetool"])
+    runtime = fetch_pinned(pin["runtime"])
+    appdir = os.path.join(BUILD, "AppDir")
+    shutil.rmtree(appdir, ignore_errors=True)
+    os.makedirs(appdir)
+    shutil.copytree(FOLDER, os.path.join(appdir, NAME), symlinks=True)
+    open(os.path.join(appdir, "AppRun"), "w").write(APPRUN)
+    os.chmod(os.path.join(appdir, "AppRun"), 0o755)
+    open(os.path.join(appdir, "pmf-studio.desktop"), "w").write(DESKTOP)
+    shutil.copy(os.path.join(ROOT, "pmfstudio", "assets", "icon.png"), os.path.join(appdir, "pmf-studio.png"))
+    if os.path.exists(APPIMAGE):
+        os.remove(APPIMAGE)
+    env = dict(os.environ, ARCH="x86_64", APPIMAGE_EXTRACT_AND_RUN="1")      # appimagetool is itself an AppImage: run it without needing FUSE
+    r = subprocess.run([tool, "--runtime-file", runtime, appdir, APPIMAGE], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if r.returncode or not os.path.exists(APPIMAGE):
+        sys.exit("appimagetool failed:\n" + r.stdout[-3000:])
+    os.chmod(APPIMAGE, 0o755)
+    digest = sha256(APPIMAGE)
+    open(APPIMAGE + ".sha256", "w").write("%s  %s\n" % (digest, os.path.basename(APPIMAGE)))
+    shutil.rmtree(appdir, ignore_errors=True)
+    say("\n%s\n  %.1f MB\n  SHA-256 %s" % (APPIMAGE, os.path.getsize(APPIMAGE) / 1e6, digest))
 
 
 def main():
-    if "--zip-only" in sys.argv:                           # zip the folder built (and tested) a moment ago
+    if "--zip-only" in sys.argv or "--appimage" in sys.argv:           # pack the folder built (and tested) a moment ago
         bad = scan_personal()
         if bad:
             sys.exit("personal strings found: %s" % bad[:5])
-        make_zip()
+        if "--zip-only" in sys.argv:
+            make_archive()
+        if "--appimage" in sys.argv:
+            make_appimage()
         return
     zpath, pin = fetch_ffmpeg()
     packed = pyinstaller()
@@ -219,9 +336,9 @@ def main():
     else:
         say("no personal strings found in the release")
     if "--no-zip" not in sys.argv:
-        make_zip()
-    shutil.rmtree(BUILD, ignore_errors=True)               # the half-finished copies in build\ also contain a PMF Studio.exe; only release\ should
-    say("\nthe finished program is the folder %s (and the zip beside it)" % FOLDER)
+        make_archive()
+    shutil.rmtree(BUILD, ignore_errors=True)               # the half-finished copies in build/ also contain a PMF Studio program; only release/ should
+    say("\nthe finished program is the folder %s (and the archive beside it)" % FOLDER)
 
 
 if __name__ == "__main__":

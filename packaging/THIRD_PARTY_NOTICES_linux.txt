@@ -1,0 +1,51 @@
+PMF Studio - third-party notices (Linux)
+========================================
+
+PMF Studio itself is copyright (C) 2026 Mr-Shizzy and released under the GNU General Public License, version 3 (see LICENSE).
+Its source code is at https://github.com/Mr-Shizzy/PMF-Studio (the tag of each release holds the source of that release).
+
+The release folder also contains programs and libraries made by other people. They keep their own licences. PMF Studio starts
+FFmpeg and atracdenc as separate programs (it does not link to them), so their licences apply to those programs only.
+
+
+FFmpeg  (tools/ffmpeg)
+----------------------
+Version: 7.0.2 (see tools/ffmpeg-build.txt; "tools/ffmpeg -version" prints it).
+Build:   the static Linux build by John Van Sickle, https://johnvansickle.com/ffmpeg/ (build info: licenses/ffmpeg-README.txt).
+Licence: GNU General Public License version 3 (this build includes GPL libraries such as x264). The licence text is in
+         licenses/ffmpeg-LICENSE.txt.
+Source:  FFmpeg 7.0.2: https://ffmpeg.org/releases/ffmpeg-7.0.2.tar.xz . The libraries inside the build and their versions are listed in
+         licenses/ffmpeg-README.txt (for example x264 0.164.3191 - GPL, LAME 3.100 - LGPL); each one's source is published by its own
+         project. PMF Studio has not modified FFmpeg. The binary was fetched from the address in tools/ffmpeg-build.txt and checked
+         against the SHA-256 written there. If you want the exact build scripts, ask the build's author at the address above.
+         You may also write to the PMF Studio project page for a copy of the source of any GPL program in this release.
+
+
+atracdenc  (tools/atracdenc)
+----------------------------
+An open ATRAC3plus encoder by Daniil Cherednik and contributors: https://github.com/dcherednik/atracdenc
+Licence: GNU Lesser General Public License version 2.1 (licenses/atracdenc-LICENSE-LGPL-2.1.txt).
+Source:  the upstream commit named in source/atracdenc/BASE_COMMIT.txt, plus four small patches made for PMF Studio (frame-size,
+         tonal-trim, adaptive-precision, windows-no-libsndfile - the last one only replaces the sound-file reader and is used on
+         every system), which are all included in source/atracdenc/ (the patches are under the same LGPL-2.1 licence).
+         source/atracdenc/README.txt gives the build commands. The program you have was built from that source with those commands
+         (cmake, g++ on Linux, linked statically with the GNU C library, which is under the LGPL 2.1: https://www.gnu.org/software/libc/ ).
+         You can rebuild atracdenc from that source and put your own build in tools/ to replace it.
+
+
+Python  (the "PMF Studio" program and its _internal folder)
+-----------------------------------------------------------
+PMF Studio is written in Python and packaged with PyInstaller. The Python runtime is under the Python Software Foundation licence
+(licenses/python-LICENSE.txt). It includes Tcl/Tk (a BSD-style licence: https://www.tcl.tk/software/tcltk/license.html) and the
+libraries Python itself uses (such as OpenSSL under the Apache licence 2.0, zlib, bzip2, xz and libffi, each under its own permissive
+licence). PyInstaller is under the GNU General Public License version 2 with an exception that lets programs it packages use any licence:
+https://github.com/pyinstaller/pyinstaller/blob/develop/COPYING.txt
+
+
+AppImage runtime  (only inside the .AppImage file)
+--------------------------------------------------
+The AppImage starts with the small "type2-runtime" program of the AppImage project: https://github.com/AppImage/type2-runtime
+(MIT licence; its source is at that address).
+
+
+Not affiliated with Sony. "PSP" and "PlayStation" are trademarks of Sony Interactive Entertainment. PMF Studio contains no game content.

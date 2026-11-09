@@ -6,7 +6,7 @@ drive letter, and still find them. A saved folder that no longer exists or can't
 import json
 import os
 
-from .paths import app_dir, default_output
+from .paths import data_dir, default_output
 
 FILE = "PMF Studio settings.json"
 DEFAULTS = {"auto_update": True, "dark": True, "open_folder": True, "output_dir": "", "low_priority": True, "skip_version": ""}
@@ -14,7 +14,7 @@ KINDS = {"auto_update": bool, "dark": bool, "open_folder": bool, "output_dir": s
 
 
 def path():
-    return os.path.join(app_dir(), FILE)
+    return os.path.join(data_dir(), FILE)
 
 
 def load():
@@ -46,14 +46,14 @@ def to_stored(folder):
     if not folder:
         return ""
     try:
-        rel = os.path.relpath(folder, app_dir())
+        rel = os.path.relpath(folder, data_dir())
     except ValueError:                                         # another drive: no relative form exists
         return folder
     return folder if rel.startswith("..") or os.path.isabs(rel) else rel
 
 
 def resolve(stored):
-    return stored if os.path.isabs(stored) else os.path.join(app_dir(), stored)
+    return stored if os.path.isabs(stored) else os.path.join(data_dir(), stored)
 
 
 def usable(folder):

@@ -13,6 +13,15 @@ def app_dir():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def data_dir():
+    """where the settings, the saved files and the working files go: beside the program, except for an AppImage, whose own folder is read-only
+    and goes away when it closes: those go beside the .AppImage file"""
+    image = os.environ.get("APPIMAGE")
+    if image and getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(image))
+    return app_dir()
+
+
 def pid_alive(pid):
     """is a program with this process number still running (when that can't be told: yes, so nothing is deleted by mistake)"""
     if os.name != "nt":
@@ -82,7 +91,7 @@ def restore_spare(name, spare_dir, tools_dir):
 
 def restore_missing_tools():
     """-> names of the helper programs that were missing and are back (only in the packaged program, which carries the spares)"""
-    if not getattr(sys, "frozen", False):
+    if not getattr(sys, "frozen", False) or os.environ.get("APPIMAGE"):         # (an AppImage is read-only: nothing can be put back in it)
         return []
     spare = os.path.join(getattr(sys, "_MEIPASS", os.path.join(app_dir(), "_internal")), "spare")
     return [n for n in SPARE_TOOLS if restore_spare(n, spare, os.path.join(app_dir(), "tools"))]
@@ -107,7 +116,7 @@ def find_tool(name):
 
 
 def default_output():
-    return os.path.join(app_dir(), "Output")
+    return os.path.join(data_dir(), "Output")
 
 
 def check_tools():

@@ -16,7 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import VERSION, STAGE, REPO, jobs, settings, updater
 from . import dropfiles, paths, preflight
-from .paths import app_dir, find_tool
+from .paths import app_dir, data_dir, find_tool
 from .theme import T, S, set_scale, set_theme, mix
 from .widgets import Check, FitPicker, ProgressBar, ScrollArea, Segmented, Slider, TrimBar, STATE_COLORS, clock
 from pmfkit import fit
@@ -1278,7 +1278,7 @@ class App(tk.Tk):
             user = getpass.getuser()
         except Exception:
             user = ""
-        for real, shown in ((paths.app_dir(), "<program>"), (tempfile.gettempdir(), "<temp>"), (os.path.expanduser("~"), "<home>"),
+        for real, shown in ((paths.app_dir(), "<program>"), (paths.data_dir(), "<program>"), (tempfile.gettempdir(), "<temp>"), (os.path.expanduser("~"), "<home>"),
                             (os.environ.get("USERNAME", ""), "<user>"), (os.environ.get("USER", ""), "<user>"), (user, "<user>")):
             if real and len(real) > 2:
                 text = text.replace(real, shown).replace(real.replace("\\", "/"), shown)
@@ -1333,7 +1333,7 @@ class App(tk.Tk):
             cmd = [sys.executable] + ([] if getattr(sys, "frozen", False) else ["-m", "pmfstudio"]) + ["--selftest"]
             env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
             env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
-            result = os.path.join(app_dir(), "selftest_result.txt")
+            result = os.path.join(data_dir(), "selftest_result.txt")
             try:
                 os.remove(result)
             except OSError:
@@ -1740,7 +1740,7 @@ class App(tk.Tk):
 
 
 def main():
-    base = os.path.join(app_dir(), "temp")                 # working files stay beside the program too, not in the Windows temp folder
+    base = os.path.join(data_dir(), "temp")                 # working files stay beside the program too, not in the Windows temp folder
     work = os.path.join(base, "run%d" % os.getpid())       # one folder per running program: a second PMF Studio never deletes the first one's files
     paths.sweep_temp(base, os.getpid())                    # and folders left behind by a program that was killed are removed
     if settings.usable(base):

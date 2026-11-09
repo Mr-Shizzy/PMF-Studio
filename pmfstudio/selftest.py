@@ -27,7 +27,7 @@ def run():
     if all(p for p, _ in status.values()):
         tools = {"ffmpeg": status["ffmpeg"][0], "atracdenc": status["atracdenc"][0]}
         say("ffmpeg version %s.%s, picture flag %s" % (*toolinfo.ffmpeg_version(tools["ffmpeg"]), " ".join(toolinfo.passthrough_args(tools["ffmpeg"]))))
-        work = tempfile.mkdtemp(prefix="selftest_", dir=tempfile.gettempdir() if not settings.usable(os.path.join(paths.app_dir(), "temp")) else os.path.join(paths.app_dir(), "temp"))
+        work = tempfile.mkdtemp(prefix="selftest_", dir=tempfile.gettempdir() if not settings.usable(os.path.join(paths.data_dir(), "temp")) else os.path.join(paths.data_dir(), "temp"))
         src = os.path.join(work, "clip.mp4")
         try:
             r = subprocess.run([tools["ffmpeg"], "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30:d=4", "-f", "lavfi", "-i", "sine=f=440:d=4",
@@ -92,7 +92,7 @@ def run():
     lines.append("SELFTEST " + ("OK" if ok else "FAILED"))
     text = "\n".join(lines) + "\n"
     try:
-        open(os.path.join(paths.app_dir(), "selftest_result.txt"), "w", encoding="utf8").write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + text)
+        open(os.path.join(paths.data_dir(), "selftest_result.txt"), "w", encoding="utf8").write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + text)
     except OSError:
         pass
     if sys.stdout:
