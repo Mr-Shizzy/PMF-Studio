@@ -18,6 +18,24 @@ class TextTests(unittest.TestCase):
         self.assertIn("Icon=/opt/PMF Studio/icon.png\n", t)
         self.assertTrue(t.startswith("[Desktop Entry]\n"))
         self.assertNotIn("\r", t)
+        self.assertIn("StartupWMClass=Pmfstudio\n", t)                       # the window's class: a dock groups the window under this launcher
+
+    def test_the_appimages_own_entry_names_the_same_class(self):
+        import re
+        build = open(os.path.join(os.path.dirname(__file__), "..", "packaging", "build_release.py"), encoding="utf-8").read()
+        self.assertEqual(re.findall(r"StartupWMClass=(\w+)", build), [launcher.WINDOW_CLASS])
+
+    def test_the_window_really_gets_the_class_the_launchers_name(self):
+        """Tk changes the capitals of the name it is given; what it makes of ours must be what the launchers say"""
+        try:
+            import tkinter
+            root = tkinter.Tk(className=launcher.TK_CLASS_NAME)
+        except Exception:
+            self.skipTest("needs a display")
+        try:
+            self.assertEqual(root.winfo_class(), launcher.WINDOW_CLASS)
+        finally:
+            root.destroy()
 
     def test_characters_that_are_special_in_a_launcher_line_are_escaped(self):
         self.assertEqual(launcher.quote("/a b/c"), '"/a b/c"')

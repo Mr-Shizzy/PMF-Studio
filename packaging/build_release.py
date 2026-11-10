@@ -167,6 +167,63 @@ def add_tkdnd(dest_tools, dest_lic):
     say("drag and drop for Linux: %s, SHA-256 %s" % (lib, sha256(os.path.join(out, lib))))
 
 
+def add_system_library_notices(internal, dest_lic):
+    """Linux: PyInstaller copies the system libraries the program needs (X11, Xft, FreeType, fontconfig, ...) from this build machine into
+    _internal. Each has its own licence, and the Debian/Ubuntu package that owns the file keeps the text in /usr/share/doc/<package>/copyright.
+    Collects those texts, with the package names and versions, in licenses/bundled-system-libraries.txt."""
+    if not shutil.which("dpkg"):
+        say("WARNING: dpkg not found: the licence texts of the bundled system libraries were NOT collected")
+        return
+    packages = {}
+    for name in sorted(os.listdir(internal)):
+        if ".so" not in name or not os.path.isfile(os.path.join(internal, name)):
+            continue
+        for libdir in ("/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu"):
+            path = os.path.join(libdir, name)
+            if not os.path.exists(path) or sha256(path) != sha256(os.path.join(internal, name)):
+                continue                                                # only a file that really is the system's copy (Python brings its own libraries)
+            r = subprocess.run(["dpkg", "-S", os.path.realpath(path)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            if r.returncode == 0 and r.stdout.strip():
+                packages.setdefault(r.stdout.split(":")[0].strip(), []).append(name)
+                break
+    parts = ["Licence texts of the system libraries that are copied into the _internal folder of this program.\n"
+             "They come from the Ubuntu packages named below (the texts are the packages' own copyright files).\n"
+             "FreeType is used under the FreeType Licence (the choice its own text offers next to the GPL 2).\n"]
+    for package in sorted(packages):
+        version = subprocess.run(["dpkg-query", "-W", "-f=${Version}", package], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout
+        doc = os.path.join("/usr/share/doc", package.split(":")[0], "copyright")
+        text = open(doc, encoding="utf8", errors="replace").read() if os.path.exists(doc) else "(no copyright file found in the package)"
+        parts.append("\n" + "=" * 78 + "\n%s %s  (%s)\n" % (package, version, ", ".join(packages[package])) + "=" * 78 + "\n" + text)
+    with open(os.path.join(dest_lic, "bundled-system-libraries.txt"), "w", encoding="utf8", newline="\n") as f:
+        f.write("".join(parts))
+    say("system libraries inside the program: %s" % ", ".join("%s (%s)" % (p, ", ".join(packages[p])) for p in sorted(packages)))
+
+
+FONT_PIN = os.path.join(ROOT, "packaging", "linux", "font_pin.json")
+
+
+def add_fonts(dest_tools, dest_lic):
+    """Linux: the Selawik font (Regular and Bold), Microsoft's metric-compatible stand-in for Segoe UI, SIL Open Font License 1.1. The download is
+    pinned (packaging/linux/font_pin.json) and checked, and so is each font file taken out of it; it is never committed. The licence text goes
+    in licenses/. pmfstudio/fonts.py tells fontconfig about the files when the program starts."""
+    pin = json.load(open(FONT_PIN, encoding="utf8"))["selawik"]
+    path = fetch_pinned(pin)
+    out = os.path.join(dest_tools, "fonts")
+    os.makedirs(out, exist_ok=True)
+    with zipfile.ZipFile(path) as z:
+        for name, want in pin["files"].items():
+            data = z.read(name)
+            if hashlib.sha256(data).hexdigest() != want:
+                sys.exit("%s in %s does not match its pinned SHA-256 - not using it." % (name, pin["asset"]))
+            with open(os.path.join(out, name), "wb") as f:
+                f.write(data)
+    lic = os.path.join(ROOT, "packaging", "licenses", "Selawik-OFL-1.1.txt")
+    if sha256(lic) != pin["licence_sha256"]:
+        sys.exit("packaging/licenses/Selawik-OFL-1.1.txt has changed: check it against the font's licence and update font_pin.json")
+    shutil.copy(lic, os.path.join(dest_lic, "Selawik-OFL-1.1.txt"))
+    say("fonts for Linux: %s" % ", ".join(sorted(os.listdir(out))))
+
+
 def pyinstaller():
     say("packing the program with PyInstaller")
     for d in (os.path.join(BUILD, "dist"), os.path.join(BUILD, "work")):
@@ -211,6 +268,8 @@ def assemble(packed, zpath, pin):
     unpack_ffmpeg(zpath, tools, lic)
     if not WINDOWS:
         add_tkdnd(tools, lic)
+        add_fonts(tools, lic)
+        add_system_library_notices(os.path.join(FOLDER, "_internal"), lic)
     atrac = os.path.join(ROOT, "tools", "atracdenc")
     shutil.copy(os.path.join(atrac, "bin", "atracdenc" + EXE), os.path.join(tools, "atracdenc" + EXE))
     for f in atracdenc_source_files(atrac):
@@ -251,7 +310,8 @@ def selftest():
 PERSONAL_MAIL = re.compile(rb"[A-Za-z0-9._%+-]+@(?:gmail|googlemail|outlook|hotmail|live|yahoo|icloud|proton|protonmail)\.[a-z]{2,}", re.I)
 # public author lines in Python's own io module (CPython source), carried inside python312.dll and base_library.zip
 KNOWN_MAIL = {b"mike.verdone@gmail.com", b"amauryfa@gmail.com",
-              b"petasisg@yahoo.gr"}                # the author line of tkdnd, in its licence text (licenses/tkdnd-LICENSE.txt)
+              b"petasisg@yahoo.gr",                # the author line of tkdnd, in its licence text (licenses/tkdnd-LICENSE.txt)
+              b"aixtools@gmail.com"}               # a contributor's public attribution line in libbsd's copyright file (licenses/bundled-system-libraries.txt)
 
 
 def scan_personal(folder=None):
@@ -325,6 +385,7 @@ Exec=AppRun %F
 Icon=pmf-studio
 Categories=AudioVideo;Video;
 Terminal=false
+StartupWMClass=Pmfstudio
 """
 
 

@@ -15,7 +15,7 @@ import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
 from . import VERSION, STAGE, REPO, jobs, settings, updater
-from . import dropfiles, keepawake, launcher, paths, preflight
+from . import displayscale, dropfiles, fonts, keepawake, launcher, paths, preflight
 from .paths import app_dir, data_dir, find_tool
 from .theme import T, S, set_scale, set_theme, mix
 from .widgets import Check, FitPicker, ProgressBar, ScrollArea, Segmented, Slider, TrimBar, STATE_COLORS, clock
@@ -166,7 +166,9 @@ class App(tk.Tk):
             pass
 
     def __init__(self, files=None):
-        super().__init__()
+        # Linux: the window's class is what a dock or taskbar matches against the launcher's StartupWMClass (Windows does it with the ID above)
+        super().__init__(**({} if os.name == "nt" else {"className": launcher.TK_CLASS_NAME}))
+        self.desktop_dpi = displayscale.apply(self)                              # Linux: the desktop's own DPI setting (Windows: set above)
         set_scale(self.winfo_fpixels("1i") / 96)
         self.settings = settings.load()
         set_theme(self.settings["dark"])
@@ -260,6 +262,15 @@ class App(tk.Tk):
         st.configure("Horizontal.TProgressbar", troughcolor=T.side, background=T.accent, bordercolor=T.line, lightcolor=T.accent, darkcolor=T.accent)
         st.configure("Horizontal.TScale", background=T.bg, troughcolor=T.side, bordercolor=T.line)
 
+    SIDEBAR_LABELS = ("Gameboot", "C-Intro", "EBOOT icon", "Shrink game movies", "AT3 Tools", "Extract", "Player", "Help", "About")
+
+    def sidebar_width(self):
+        """200 (scaled), or wider when the font in use makes the longest entry (bold, the chosen one) too wide for that: a replacement font is
+        never exactly as wide as Segoe UI"""
+        bold = tkfont.Font(font=(FONT, 11, "bold"))
+        need = max(bold.measure(t) for t in self.SIDEBAR_LABELS) + 2 * S(16) + 2 * S(6) + 8       # label padding, the gap round it, the frame's edge
+        return max(S(200), need)
+
     def build_ui(self):
         if self.player:
             self.player.close()
@@ -278,7 +289,7 @@ class App(tk.Tk):
         HeaderButton(bar, "Options", lambda: self.show("options")).pack(side="left", padx=4)
         body = tk.Frame(self, bg=T.bg)
         body.pack(fill="both", expand=True)
-        self.side = tk.Frame(body, bg=T.side, width=S(200 if os.name == "nt" else 228), highlightbackground=T.line, highlightthickness=1)      # Linux's font is wider
+        self.side = tk.Frame(body, bg=T.side, width=self.sidebar_width(), highlightbackground=T.line, highlightthickness=1)
         self.side.pack(side="left", fill="y")
         self.side.pack_propagate(False)
         self.holder = tk.Frame(body, bg=T.bg)
@@ -1337,6 +1348,9 @@ class App(tk.Tk):
         if os.name != "nt" and getattr(sys, "frozen", False):
             lines.append("Launcher file for dropping files on: %s" % ("not needed (running as an AppImage)" if os.environ.get("APPIMAGE") else
                                                                        "present" if os.path.exists(os.path.join(app_dir(), launcher.NAME)) else "not written (is the folder read-only?)"))
+        lines.append("Window font: %s%s" % (tkfont.Font(font=(FONT, 10)).actual("family"), "" if os.name == "nt" else " (%s; %d font families seen by Tk)" % (
+            fonts.RESULT["text"], len(tkfont.families(self)))))
+        lines.append("Screen: %s" % ("%.0f dpi from the desktop (Xft.dpi)" % self.desktop_dpi if getattr(self, "desktop_dpi", None) else "scale %.2f" % T.scale))
         lines.append("Keeping the PC awake during a job: %s" % keepawake.status())
         lines.append("Lower priority for helper programs: %s" % ("yes (below normal)" if os.name == "nt" else "yes (nice 10)" if shutil.which("nice") else "not available (nice was not found)"))
         lines.append("Settings: theme %s, lower priority %s, updates on startup %s" % ("dark" if self.settings["dark"] else "light", self.settings["low_priority"], self.settings["auto_update"]))
@@ -1791,6 +1805,7 @@ def main():
     else:                                                  # a read-only folder: use the system's temp folder instead of failing
         work = None
     launcher.refresh(app_dir(), paths.asset("icon.png"))    # Linux: the launcher file that files can be dropped on (beside the program)
+    fonts.setup()                                           # Linux: Selawik (or the best installed font) for the Windows fonts the window asks for
     try:
         App([a for a in sys.argv[1:] if not a.startswith("--")]).mainloop()
     finally:

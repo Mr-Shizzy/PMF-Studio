@@ -22,7 +22,11 @@ What is different from the Windows version:
     "Open with", and the program starts with those files. You can also run   ./"PMF Studio" movie.pmf
   - While a long job runs the computer is kept from sleeping (a lock taken with systemd-inhibit; the report in Options says
     whether it worked on your system) and the helper programs run at a lower priority (nice 10), as on Windows.
-  - The program needs a graphical desktop (X11 or Wayland with XWayland) and the usual system libraries (libX11).
+  - The window's letters: the Python this program is packed with can only draw one plain bitmap font, so PMF Studio carries its own Tk with
+    font support and the open font Selawik (tools/fonts; Microsoft's stand-in for the Windows font Segoe UI, with the same letter widths), so the
+    window looks like the Windows one. The libraries that needs (X11, FreeType, fontconfig and a few more) are copied into the _internal folder.
+    On a high-resolution screen the window follows the desktop's own DPI setting (Xft.dpi).
+  - The program needs a graphical desktop (X11 or Wayland with XWayland).
 Everything that makes files (gameboot, C-Intro, EBOOT icon, shrinking game movies, AT3 tools, Extract) works as on Windows.
 
 Check for updates downloads a new version when there is one, checks it and tests it, then restarts into it. It asks first,

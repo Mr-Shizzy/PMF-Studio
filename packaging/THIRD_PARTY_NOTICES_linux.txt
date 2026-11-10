@@ -46,6 +46,24 @@ Build:   made by the PMF Studio project from the official source (packaging/linu
          header files and stub code of Tcl 9.0.4 and Tk 9.0.4, hashes pinned). Unchanged source; the Tcl and Tk licence texts are
          licenses/tcl-LICENSE.txt and licenses/tk-LICENSE.txt. It uses the system's libX11.
 
+Selawik  (tools/fonts)
+----------------------
+The letters of the window: Selawik Regular and Bold, Microsoft's open font made to take the place of Segoe UI (which only Windows has), with
+the same letter widths, so the window looks the same on Linux. Copyright 2015 Microsoft Corporation, with Reserved Font Name Selawik.
+https://github.com/microsoft/Selawik (release 1.01, the files are used unchanged)
+Licence: SIL Open Font License, Version 1.1 (licenses/Selawik-OFL-1.1.txt). The fonts are used by the program, not changed or sold on their own.
+
+Tk with font support and the system libraries inside _internal
+--------------------------------------------------------------
+The Python this program is packed with has a Tk that cannot use the computer's fonts (it can only draw with one plain bitmap font). So
+PMF Studio uses a Tk 9.0.4 built by the PMF Studio project from the official source (packaging/linux/build_tk_xft.sh in the repository: the
+same Tk version, built with font support; the source tarball hashes and the Ubuntu header packages it was built against are pinned in that
+script). Tk's licence is the BSD-style Tcl/Tk licence (licenses/tk-LICENSE.txt).
+For font drawing and the window system that Tk then needs, the program carries copies of these system libraries (taken from the Ubuntu 24.04
+machine it was built on) in its _internal folder: libX11 (with libXau, libXdmcp, libbsd, libmd), libXft, libXrender, fontconfig, FreeType
+(under the FreeType Licence), expat, libpng, brotli, zlib and bzip2. All are free software under permissive licences (MIT, BSD, zlib, libpng,
+FreeType). Their licence texts, as the Ubuntu packages carry them, are in licenses/bundled-system-libraries.txt.
+
 Python  (the "PMF Studio" program and its _internal folder)
 -----------------------------------------------------------
 PMF Studio is written in Python and packaged with PyInstaller. The Python runtime is under the Python Software Foundation licence

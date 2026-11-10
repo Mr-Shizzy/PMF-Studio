@@ -53,6 +53,7 @@ Linux is new in 0.2 and experimental. It was tested on Ubuntu 24.04 running insi
 distributions: all the tests pass there, the movie writer and the sound encoder make byte-for-byte the same files as on Windows from the same
 input, the finished tar.gz and AppImage pass their self-test, and the updater was tried with a release file on disk (not against a published
 release). The player's sound (PulseAudio or PipeWire) and dragging files onto the window (X11 drag and drop, through XWayland on Wayland) were tried there with a recorded sound check and a drag made by a program that follows the protocol, not with a real speaker or a real file manager.
+The Python used for the Linux files can only draw one plain bitmap font, so the Linux files carry a Tk built with font support (`packaging/linux/build_tk_xft.sh`) and the open font Selawik; the window was looked at in WSL, and follows the desktop's DPI setting where the desktop gives one, which could not be tried on a real high-resolution screen.
 
 The movie writer follows Sony's own muxer: pack timing, the video buffer (a pack waits until it fits the buffer the movie declares) and
 the encoder's buffer limit were matched against about 85 retail movies, whose streams it reproduces byte for byte. 49 of them come out with

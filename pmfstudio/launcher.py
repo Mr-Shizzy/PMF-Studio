@@ -8,6 +8,11 @@ import os
 import sys
 
 NAME = "PMF Studio.desktop"
+# The program's window class on Linux: a dock or taskbar groups a window under the launcher whose StartupWMClass equals it. Tk turns the name it is
+# given into the class by capital first letter and the rest lower case (checked on a real X server: "PMFStudio" came out as "Pmfstudio"), so the
+# name given is the lower-case one and the launcher names what Tk makes of it.
+TK_CLASS_NAME = "pmfstudio"
+WINDOW_CLASS = "Pmfstudio"
 
 
 def quote(path):
@@ -23,7 +28,7 @@ def text(program, icon=None):
         return None
     return ("[Desktop Entry]\nType=Application\nName=PMF Studio\n"
             "Comment=Make PSP movies, boot movies and AT3 sounds (drop files on this to open them)\n"
-            "Exec=%s %%F\n%sTerminal=false\nCategories=AudioVideo;Video;\n" % (quote(program), "Icon=%s\n" % icon.replace("\\", "\\\\") if icon else ""))
+            "Exec=%s %%F\n%sTerminal=false\nCategories=AudioVideo;Video;\nStartupWMClass=%s\n" % (quote(program), "Icon=%s\n" % icon.replace("\\", "\\\\") if icon else "", WINDOW_CLASS))
 
 
 def write(folder, program, icon=None):
