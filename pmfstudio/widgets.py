@@ -185,15 +185,59 @@ class Check(tk.Frame):
 class Segmented(tk.Frame):
     """Two or three choices side by side; the chosen one is filled."""
 
-    def __init__(self, parent, options, variable, command=None, pad=18):
+    def __init__(self, parent, options, variable, command=None, pad=18, equal=False):
+        """equal: every button gets the same width (see fit_together), so the row doesn't change shape when another choice is picked"""
         super().__init__(parent, bg=T.line, padx=1, pady=1)
         self.var, self.command, self.items = variable, command, {}
-        for value, text in options:
+        self.size = 10
+        self.equal = equal
+        for i, (value, text) in enumerate(options):
             lab = tk.Label(self, text=text, font=(FONT, 10), padx=S(pad), pady=S(6), cursor="hand2")
-            lab.pack(side="left")
+            if equal:
+                lab.grid(row=0, column=i, sticky="nsew")
+                self.columnconfigure(i, uniform="seg")
+            else:
+                lab.pack(side="left")
             lab.bind("<Button-1>", lambda e, v=value: self.choose(v))
             self.items[value] = lab
         self.refresh()
+
+    def button_width(self, pad, size=10):
+        """the width in pixels one button needs at this padding and font size: the widest line of any label, in bold (the chosen one is bold)"""
+        import tkinter.font as tkfont
+        bold = tkfont.Font(font=(FONT, size, "bold"))
+        lab = next(iter(self.items.values()))
+        edge = 2 * (int(lab.cget("bd")) + int(lab.cget("highlightthickness")))
+        text = max(bold.measure(line) for l in self.items.values() for line in l.cget("text").split("\n"))
+        return text + 2 * S(pad) + edge
+
+    def set_button_width(self, width, pad, size=10):
+        self.size = size
+        for i, lab in enumerate(self.items.values()):
+            lab.configure(padx=S(pad))
+            self.columnconfigure(i, minsize=width, uniform="seg")
+        self.refresh()
+
+    @staticmethod
+    def fit_together(segments, room, pad=12):
+        """equal buttons, one width for every row given: what the widest label of any row needs, but never so wide that a row is wider than
+        `room` pixels. When the room is short the padding gives way first, then the font gets a size smaller (down to 8).
+        -> True when the rows fit the room (when not, they are set as small as they go)"""
+        fits = True
+        for size in (10, 9, 8):
+            for p in range(pad, 1, -1):
+                width = max(s.button_width(p, size) for s in segments)
+                if all(width * len(s.items) + 2 <= room for s in segments):
+                    break
+            else:
+                continue
+            break
+        else:
+            p, size, fits = 2, 8, False
+            width = max(s.button_width(p, size) for s in segments)
+        for s in segments:
+            s.set_button_width(width, p, size)
+        return fits
 
     def choose(self, v):
         if self.var.get() != v:
@@ -205,7 +249,7 @@ class Segmented(tk.Frame):
     def refresh(self):
         for v, lab in self.items.items():
             on = self.var.get() == v
-            lab.configure(bg=T.accent if on else T.bg, fg=T.on_accent if on else T.ink, font=(FONT, 10, "bold" if on else "normal"))
+            lab.configure(bg=T.accent if on else T.bg, fg=T.on_accent if on else T.ink, font=(FONT, self.size, "bold" if on else "normal"))
 
 
 _SHAPE_CACHE = {}

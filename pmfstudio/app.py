@@ -801,6 +801,7 @@ class App(tk.Tk):
         self.vars["sound"] = tk.StringVar(value="keep")
         self.picture_holder = tk.Frame(self.main, bg=T.bg)
         self.picture_holder.pack(fill="x")
+        self.picture_holder.bind("<Configure>", lambda e: self.shrink_fit())
         self.picture_note = tk.Label(self.main, text="", bg=T.bg, fg=T.muted, font=(FONT, 9), anchor="w", justify="left", wraplength=S(700))
         self.picture_note.pack(fill="x", pady=(2, 8))
         self.sound_holder = tk.Frame(self.main, bg=T.bg)
@@ -937,6 +938,7 @@ class App(tk.Tk):
         self.tracks_note = tk.Label(holder, text="", bg=T.bg, fg=T.muted, font=(FONT, 9), anchor="w", justify="left", wraplength=S(700))
         self.tracks_note.pack(fill="x", pady=(2, 8))
         self.tracks_text()
+        self.after_idle(self.shrink_fit)                    # (the sentence under it wraps to the room too)
 
     def tracks_text(self):
         info = self.shrink_info_data
@@ -1013,14 +1015,42 @@ class App(tk.Tk):
             if info and info.picture_kbps:
                 second = "no change" if value == "1.0" else "%s kbps" % format(max(shrink.FLOOR_KBPS, int(info.picture_kbps * float(value))), ",")
             else:
-                second = "no change" if value == "1.0" else "of what it is now"
+                second = "no change" if value == "1.0" else "of original"
             options.append((value, "%s\n%s" % (name, second)))
-        Segmented(f, options, self.vars["picture"], self.shrink_texts, pad=12).pack(side="left")
+        picture = Segmented(f, options, self.vars["picture"], self.shrink_texts, pad=12, equal=True)
+        picture.pack(side="left")
         f = tk.Frame(self.sound_holder, bg=T.bg)
         f.pack(fill="x", pady=3)
         tk.Label(f, text="Sound", width=14, anchor="nw", bg=T.bg, fg=T.ink, font=(FONT, 10, "bold")).pack(side="left", anchor="n", pady=(S(6), 0))
-        Segmented(f, [(v, "%s\n%s" % (n, self.SOUND_WORDS[v])) for v, n in self.SOUND_CHOICES], self.vars["sound"], self.shrink_texts, pad=12).pack(side="left")
+        sound = Segmented(f, [(v, "%s\n%s" % (n, self.SOUND_WORDS[v])) for v, n in self.SOUND_CHOICES], self.vars["sound"], self.shrink_texts, pad=12, equal=True)
+        sound.pack(side="left")
+        self.shrink_segments = [picture, sound]
+        self.shrink_fit()
         self.shrink_texts()
+
+    def shrink_fit(self, event=None):
+        """the two rows of choices and the sentences under them fit the room the page has (the window can be made smaller): the buttons are all
+        one width, the same in both rows, and give way (padding, then the font) only when the room is short; the sentences wrap to the room"""
+        holder = getattr(self, "picture_holder", None)
+        if not self.alive(holder):
+            return
+        room = holder.winfo_width()
+        if room < 100:                                              # not laid out yet: the next <Configure> comes
+            return
+        wrap = max(S(260), room - S(10))
+        for name in ("shrink_info", "picture_note", "sound_note", "shrink_note", "tracks_note"):
+            label = getattr(self, name, None)
+            if self.alive(label) and int(label.cget("wraplength")) != wrap:
+                label.configure(wraplength=wrap)
+        segments = [s for s in getattr(self, "shrink_segments", []) if self.alive(s)]
+        if segments:
+            captions = [s.master.winfo_children()[0] for s in segments]      # "Picture" and "Sound" in front of the rows
+            for chars in (14, 9):                                            # the captions give way as well when the room is really short
+                for c in captions:
+                    c.configure(width=chars)
+                    c.update_idletasks()
+                if Segmented.fit_together(segments, room - max(c.winfo_reqwidth() for c in captions) - S(6)):
+                    break
 
     def shrink_texts(self):
         """the sentences under the choices say what will actually happen; the last line is the size to expect"""
