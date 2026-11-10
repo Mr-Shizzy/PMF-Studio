@@ -1350,7 +1350,7 @@ class App(tk.Tk):
                                                                        "present" if os.path.exists(os.path.join(app_dir(), launcher.NAME)) else "not written (is the folder read-only?)"))
         lines.append("Window font: %s%s" % (tkfont.Font(font=(FONT, 10)).actual("family"), "" if os.name == "nt" else " (%s; %d font families seen by Tk)" % (
             fonts.RESULT["text"], len(tkfont.families(self)))))
-        lines.append("Screen: %s" % ("%.0f dpi from the desktop (Xft.dpi)" % self.desktop_dpi if getattr(self, "desktop_dpi", None) else "scale %.2f" % T.scale))
+        lines.append("Screen: %s" % ("%.0f dpi from the desktop or your settings" % self.desktop_dpi if getattr(self, "desktop_dpi", None) else "scale %.2f" % T.scale))
         lines.append("Keeping the PC awake during a job: %s" % keepawake.status())
         lines.append("Lower priority for helper programs: %s" % ("yes (below normal)" if os.name == "nt" else "yes (nice 10)" if shutil.which("nice") else "not available (nice was not found)"))
         lines.append("Settings: theme %s, lower priority %s, updates on startup %s" % ("dark" if self.settings["dark"] else "light", self.settings["low_priority"], self.settings["auto_update"]))

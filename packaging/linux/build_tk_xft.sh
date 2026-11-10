@@ -16,6 +16,9 @@
 #   packaging/linux/build_tk_xft.sh --install-into-python    also replaces libtcl9tk9.0.so in the Python the release is built with
 #                                                         (the original is kept beside it as libtcl9tk9.0.so.pbs-original)
 set -euo pipefail
+# On Debian/Ubuntu the header files come from pinned -dev packages unpacked into a private folder (nothing is installed). Anywhere else (the
+# AlmaLinux 8 build base) the system's own -devel packages are used: libX11-devel libXft-devel libXrender-devel fontconfig-devel freetype-devel.
+if command -v apt-get > /dev/null 2>&1 && [ -z "${PMF_TKXFT_SYSTEM:-}" ]; then MODE=debs; else MODE=system; fi
 HERE="$(cd "$(dirname "$0")/../.." && pwd)"
 DL="${PMF_TKXFT_DOWNLOADS:-$HOME/pmf_build/downloads/tkxft}"
 OLD_DL="$HOME/pmf_build/downloads/tkdnd"
@@ -45,36 +48,41 @@ for f in "${!SHA[@]}"; do
   [ -f "$DL/$f" ] || { [ -f "$OLD_DL/$f" ] && cp "$OLD_DL/$f" "$DL/$f"; } || curl -sL -o "$DL/$f" "${URL[$f]}"
   echo "${SHA[$f]}  $DL/$f" | sha256sum -c --quiet - || { echo "hash of $f does not match"; exit 1; }
 done
-(cd "$DL/debs" && for p in "${DEBS[@]}"; do ls "${p%%=*}"_*.deb > /dev/null 2>&1 || apt-get download "$p" > /dev/null; done)
-echo "downloaded packages (sha256):"; (cd "$DL/debs" && sha256sum *.deb)
-for f in "${!DEBSHA[@]}"; do
-  echo "${DEBSHA[$f]}  $DL/debs/$f" | sha256sum -c --quiet - || { echo "hash of $f does not match"; exit 1; }
-done
+if [ "$MODE" = debs ]; then
+  (cd "$DL/debs" && for p in "${DEBS[@]}"; do ls "${p%%=*}"_*.deb > /dev/null 2>&1 || apt-get download "$p" > /dev/null; done)
+  echo "downloaded packages (sha256):"; (cd "$DL/debs" && sha256sum *.deb)
+  for f in "${!DEBSHA[@]}"; do
+    echo "${DEBSHA[$f]}  $DL/debs/$f" | sha256sum -c --quiet - || { echo "hash of $f does not match"; exit 1; }
+  done
+fi
 
 rm -rf "$WORK"; mkdir -p "$WORK/src" "$WORK/sys" "$WORK/tcl" "$WORK/tk"
 cd "$WORK/src"
 for f in "${!SHA[@]}"; do tar xzf "$DL/$f"; done
-for d in "$DL"/debs/*.deb; do dpkg-deb -x "$d" "$WORK/sys"; done
-SYS="$WORK/sys"; LIBDIR=/usr/lib/x86_64-linux-gnu
-# the -dev packages bring only the .so symlinks, pointing at the runtime packages' files: point them at the system's own copies
-find "$SYS$LIBDIR" -maxdepth 1 -type l | while read -r l; do
-  t="$(basename "$(readlink "$l")")"; [ -e "$LIBDIR/$t" ] && ln -sf "$LIBDIR/$t" "$l"
-done
-export PKG_CONFIG_PATH="$SYS$LIBDIR/pkgconfig:$SYS/usr/share/pkgconfig" PKG_CONFIG_SYSROOT_DIR="$SYS"
-export PKG_CONFIG_LIBDIR="$PKG_CONFIG_PATH"
+SYS=""; LIBDIR=""
+if [ "$MODE" = debs ]; then
+  for d in "$DL"/debs/*.deb; do dpkg-deb -x "$d" "$WORK/sys"; done
+  SYS="$WORK/sys"; LIBDIR=/usr/lib/x86_64-linux-gnu
+  # the -dev packages bring only the .so symlinks, pointing at the runtime packages' files: point them at the system's own copies
+  find "$SYS$LIBDIR" -maxdepth 1 -type l | while read -r l; do
+    t="$(basename "$(readlink "$l")")"; [ -e "$LIBDIR/$t" ] && ln -sf "$LIBDIR/$t" "$l"
+  done
+  export PKG_CONFIG_PATH="$SYS$LIBDIR/pkgconfig:$SYS/usr/share/pkgconfig" PKG_CONFIG_SYSROOT_DIR="$SYS"
+  export PKG_CONFIG_LIBDIR="$PKG_CONFIG_PATH"
 
-# Tk's configure asks `xft-config` first, then pkg-config; pkg-config would also want the .pc files of freetype's own dependencies (libpng, ...),
-# whose packages are not needed just to compile against Xft. So answer the question directly:
-mkdir -p "$WORK/bin"
-cat > "$WORK/bin/xft-config" <<EOF
+  # Tk's configure asks `xft-config` first, then pkg-config; pkg-config would also want the .pc files of freetype's own dependencies (libpng, ...),
+  # whose packages are not needed just to compile against Xft. So answer the question directly:
+  mkdir -p "$WORK/bin"
+  cat > "$WORK/bin/xft-config" <<EOF
 #!/bin/sh
 case "\$1" in
   --cflags) echo "-I$SYS/usr/include -I$SYS/usr/include/freetype2" ;;
   --libs) echo "-L$SYS$LIBDIR -lXft -lXrender -lfontconfig -lfreetype -lX11" ;;
 esac
 EOF
-chmod +x "$WORK/bin/xft-config"
-export PATH="$WORK/bin:$PATH"
+  chmod +x "$WORK/bin/xft-config"
+  export PATH="$WORK/bin:$PATH"
+fi
 
 echo "== Tcl 9.0.4 (only to configure Tk)"
 cd "$WORK/tcl" && "$WORK/src/tcl9.0.4/unix/configure" --enable-threads --enable-64bit --enable-shared --disable-rpath --disable-zipfs > "$WORK/tcl-configure.log" 2>&1
@@ -83,10 +91,17 @@ export LD_LIBRARY_PATH="$WORK/tcl"
 
 echo "== Tk 9.0.4 with Xft"
 cd "$WORK/tk"
-export CFLAGS="-O2 -g0 -ffile-prefix-map=$WORK=. -I$SYS/usr/include -I$SYS/usr/include/freetype2"
-export LDFLAGS="-L$SYS$LIBDIR -Wl,-z,relro"
+if [ "$MODE" = debs ]; then
+  export CFLAGS="-O2 -g0 -ffile-prefix-map=$WORK=. -I$SYS/usr/include -I$SYS/usr/include/freetype2"
+  export LDFLAGS="-L$SYS$LIBDIR -Wl,-z,relro"
+  XINC="--x-includes=$SYS/usr/include --x-libraries=$SYS$LIBDIR"
+else
+  export CFLAGS="-O2 -g0 -ffile-prefix-map=$WORK=. -std=gnu11"
+  export LDFLAGS="-Wl,-z,relro"
+  XINC=""
+fi
 "$WORK/src/tk9.0.4/unix/configure" --with-tcl="$WORK/tcl" --enable-threads --enable-64bit --enable-shared --enable-xft --disable-rpath --disable-zipfs \
-  --x-includes="$SYS/usr/include" --x-libraries="$SYS$LIBDIR" > "$WORK/tk-configure.log" 2>&1 || { tail -30 "$WORK/tk-configure.log"; exit 1; }
+  $XINC > "$WORK/tk-configure.log" 2>&1 || { tail -30 "$WORK/tk-configure.log"; exit 1; }
 grep -iE "xft" "$WORK/tk-configure.log" | head -5
 grep -q "whether to use xft... yes" "$WORK/tk-configure.log" || { echo "Tk's configure did not accept Xft: not building a Tk without fonts"; exit 1; }
 make -j"$(nproc)" libtcl9tk9.0.so > "$WORK/tk-make.log" 2>&1 || { tail -30 "$WORK/tk-make.log"; exit 1; }
@@ -98,7 +113,8 @@ cp "$WORK/src/tk9.0.4/license.terms" "$OUT/license.tk.txt"
 echo "built:"; ls -l "$OUT"; sha256sum "$OUT/libtcl9tk9.0.so"
 echo "needs (must be the system's own libraries only):"; readelf -d "$OUT/libtcl9tk9.0.so" | grep NEEDED
 echo "Xft inside:"; strings "$OUT/libtcl9tk9.0.so" | grep -c XftFontOpen || true
-echo "private strings in the library (must print nothing):"; strings "$OUT/libtcl9tk9.0.so" | grep -E "/home/|/mnt/c|/Users/|${USER:-nobody-here}" || true
+WHO="${USER:-nobody-here}"; [ "$WHO" = root ] && WHO=nobody-here                    # ("root" is also an ordinary word inside Tk)
+echo "private strings in the library (must print nothing):"; strings "$OUT/libtcl9tk9.0.so" | grep -E "/home/|/mnt/c|/Users/|$WHO" || true
 
 if [ "${1:-}" = "--install-into-python" ]; then
   BASE="$("$HOME/pmf_build/venv/bin/python" -c 'import sys; print(sys.base_prefix)')"

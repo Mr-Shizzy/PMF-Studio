@@ -167,33 +167,61 @@ def add_tkdnd(dest_tools, dest_lic):
     say("drag and drop for Linux: %s, SHA-256 %s" % (lib, sha256(os.path.join(out, lib))))
 
 
+LIB_DIRS = ("/usr/lib64", "/lib64", "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu")
+
+
+def system_package_of(path):
+    """(package, version, licence text) of the system package that owns this file, from dpkg (Debian, Ubuntu) or rpm (Red Hat family); None if neither
+    knows it. A Debian package keeps its licence in /usr/share/doc/<package>/copyright, an rpm lists its licence files (rpm -qL)."""
+    real = os.path.realpath(path)
+    if shutil.which("dpkg"):
+        r = subprocess.run(["dpkg", "-S", real], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if r.returncode or not r.stdout.strip():
+            return None
+        package = r.stdout.split(":")[0].strip()
+        version = subprocess.run(["dpkg-query", "-W", "-f=${Version}", package], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout
+        doc = os.path.join("/usr/share/doc", package, "copyright")
+        return package, version, open(doc, encoding="utf8", errors="replace").read() if os.path.exists(doc) else "(no copyright file found in the package)"
+    if shutil.which("rpm"):
+        r = subprocess.run(["rpm", "-qf", "--qf", "%{NAME}\n%{VERSION}-%{RELEASE}", real], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        if r.returncode or "\n" not in r.stdout:
+            return None
+        package, version = r.stdout.split("\n", 1)
+        files = subprocess.run(["rpm", "-qL", package], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.split()
+        text = "".join("--- %s\n%s\n" % (os.path.basename(f), open(f, encoding="utf8", errors="replace").read()) for f in files if os.path.isfile(f))
+        return package, version, text or "(no licence file found in the package)"
+    return None
+
+
 def add_system_library_notices(internal, dest_lic):
     """Linux: PyInstaller copies the system libraries the program needs (X11, Xft, FreeType, fontconfig, ...) from this build machine into
-    _internal. Each has its own licence, and the Debian/Ubuntu package that owns the file keeps the text in /usr/share/doc/<package>/copyright.
-    Collects those texts, with the package names and versions, in licenses/bundled-system-libraries.txt."""
-    if not shutil.which("dpkg"):
-        say("WARNING: dpkg not found: the licence texts of the bundled system libraries were NOT collected")
+    _internal. Each has its own licence, kept by the package that owns the file (see system_package_of). Collects those texts, with the package
+    names and versions, in licenses/bundled-system-libraries.txt. Only a file that really is the system's copy counts (Python brings its own)."""
+    if not (shutil.which("dpkg") or shutil.which("rpm")):
+        say("WARNING: neither dpkg nor rpm found: the licence texts of the bundled system libraries were NOT collected")
         return
-    packages = {}
+    packages, versions, texts = {}, {}, {}
     for name in sorted(os.listdir(internal)):
         if ".so" not in name or not os.path.isfile(os.path.join(internal, name)):
             continue
-        for libdir in ("/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu"):
+        for libdir in LIB_DIRS:
             path = os.path.join(libdir, name)
             if not os.path.exists(path) or sha256(path) != sha256(os.path.join(internal, name)):
-                continue                                                # only a file that really is the system's copy (Python brings its own libraries)
-            r = subprocess.run(["dpkg", "-S", os.path.realpath(path)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-            if r.returncode == 0 and r.stdout.strip():
-                packages.setdefault(r.stdout.split(":")[0].strip(), []).append(name)
+                continue
+            owner = system_package_of(path)
+            if owner:
+                package, versions[owner[0]], texts[owner[0]] = owner
+                packages.setdefault(package, []).append(name)
                 break
+    distro = ""
+    if os.path.exists("/etc/os-release"):
+        m = re.search(r'^PRETTY_NAME="?([^"\n]+)', open("/etc/os-release", encoding="utf8").read(), re.M)
+        distro = m.group(1) if m else ""
     parts = ["Licence texts of the system libraries that are copied into the _internal folder of this program.\n"
-             "They come from the Ubuntu packages named below (the texts are the packages' own copyright files).\n"
-             "FreeType is used under the FreeType Licence (the choice its own text offers next to the GPL 2).\n"]
+             "They come from the packages of the build machine (%s) named below; the texts are the packages' own licence files.\n"
+             "FreeType is used under the FreeType Licence (the choice its own text offers next to the GPL 2).\n" % (distro or "a Linux system")]
     for package in sorted(packages):
-        version = subprocess.run(["dpkg-query", "-W", "-f=${Version}", package], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout
-        doc = os.path.join("/usr/share/doc", package.split(":")[0], "copyright")
-        text = open(doc, encoding="utf8", errors="replace").read() if os.path.exists(doc) else "(no copyright file found in the package)"
-        parts.append("\n" + "=" * 78 + "\n%s %s  (%s)\n" % (package, version, ", ".join(packages[package])) + "=" * 78 + "\n" + text)
+        parts.append("\n" + "=" * 78 + "\n%s %s  (%s)\n" % (package, versions[package], ", ".join(packages[package])) + "=" * 78 + "\n" + texts[package])
     with open(os.path.join(dest_lic, "bundled-system-libraries.txt"), "w", encoding="utf8", newline="\n") as f:
         f.write("".join(parts))
     say("system libraries inside the program: %s" % ", ".join("%s (%s)" % (p, ", ".join(packages[p])) for p in sorted(packages)))
@@ -318,7 +346,7 @@ def scan_personal(folder=None):
     """no user names, personal paths or personal mail addresses inside the release (text files, programs and Python files alike)"""
     folder = folder or FOLDER
     names = {os.environ.get("USERNAME", ""), os.environ.get("USER", ""), os.path.basename(os.path.expanduser("~"))}
-    words = [w.encode() for w in names if len(w) > 2]
+    words = [w.encode() for w in names if len(w) > 2 and w.lower() != "root"]       # ("root" is the build user in a clean build system, and an ordinary word everywhere)
     bad = []
     for dp, _, files in os.walk(folder):
         for f in files:
@@ -419,6 +447,52 @@ def make_appimage():
     say("\n%s\n  %.1f MB\n  SHA-256 %s" % (APPIMAGE, os.path.getsize(APPIMAGE) / 1e6, digest))
 
 
+OLDEST_GLIBC = (2, 28)         # the Linux files are built on AlmaLinux 8 (glibc 2.28): see packaging/linux/BUILD_ON_ALMALINUX8.txt
+
+
+def glibc_floor(folder):
+    """-> (highest glibc version any program or library in the folder asks for, the file that asks), from objdump; None when objdump isn't there.
+    A program built on a newer system than the oldest one it should run on quietly asks for that newer C library and then won't start on older
+    systems (the Ubuntu 24.04 build of 0.3 needed 2.38; the published 0.2 needed 2.17)."""
+    if WINDOWS or not shutil.which("objdump"):
+        return None
+    best = ((0,), "")
+    for dp, _, files in os.walk(folder):
+        for f in files:
+            p = os.path.join(dp, f)
+            try:
+                with open(p, "rb") as fh:
+                    if os.path.islink(p) or fh.read(4) != b"\x7fELF":
+                        continue
+            except OSError:
+                continue
+            out = subprocess.run(["objdump", "-T", p], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout
+            v = highest_glibc(out)
+            if v > best[0]:
+                best = (v, os.path.relpath(p, folder))
+    return best
+
+
+def highest_glibc(objdump_output):
+    """the highest glibc version named in the output of `objdump -T` (old objdump prints GLIBC_2.2.5, new prints (GLIBC_2.2.5)); (0,) if none"""
+    found = [tuple(int(x) for x in m.split(".")) for m in re.findall(r"GLIBC_([0-9]+(?:\.[0-9]+)+)", objdump_output)]
+    return max(found) if found else (0,)
+
+
+def check_glibc_floor(folder=None):
+    best = glibc_floor(folder or FOLDER)
+    if best is None:
+        return
+    text = ".".join(map(str, best[0]))
+    if best[0] > OLDEST_GLIBC:
+        say("WARNING: this program needs glibc %s (%s), newer than the %s it should run with: build on AlmaLinux 8, not on a newer system"
+            % (text, best[1], ".".join(map(str, OLDEST_GLIBC))))
+        if "--allow-new-glibc" not in sys.argv:
+            sys.exit(1)
+    else:
+        say("oldest glibc the program needs: %s (%s): runs on Linux systems from about 2018 on" % (text, best[1]))
+
+
 def main():
     if "--zip-only" in sys.argv or "--appimage" in sys.argv:           # pack the folder built (and tested) a moment ago
         bad = scan_personal()
@@ -442,6 +516,7 @@ def main():
             sys.exit(1)
     else:
         say("no personal strings found in the release")
+    check_glibc_floor()
     if "--no-zip" not in sys.argv:
         make_archive()
     shutil.rmtree(BUILD, ignore_errors=True)               # the half-finished copies in build/ also contain a PMF Studio program; only release/ should

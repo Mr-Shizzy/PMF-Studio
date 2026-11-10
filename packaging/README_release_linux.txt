@@ -26,7 +26,8 @@ What is different from the Windows version:
     font support and the open font Selawik (tools/fonts; Microsoft's stand-in for the Windows font Segoe UI, with the same letter widths), so the
     window looks like the Windows one. The libraries that needs (X11, FreeType, fontconfig and a few more) are copied into the _internal folder.
     On a high-resolution screen the window follows the desktop's own DPI setting (Xft.dpi).
-  - The program needs a graphical desktop (X11 or Wayland with XWayland).
+  - The program needs a graphical desktop (X11 or Wayland with XWayland) and a Linux with glibc 2.28 or newer (Ubuntu 18.10, Debian 10,
+    Fedora 29, RHEL/Alma/Rocky 8 and anything newer). It was tried on AlmaLinux 8, Ubuntu 22.04, Debian 13 and Fedora 44 (inside Windows).
 Everything that makes files (gameboot, C-Intro, EBOOT icon, shrinking game movies, AT3 tools, Extract) works as on Windows.
 
 Check for updates downloads a new version when there is one, checks it and tests it, then restarts into it. It asks first,

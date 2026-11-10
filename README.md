@@ -42,7 +42,7 @@ program isn't signed: choose *More info*, then *Run anyway*. The release notes l
 
 **Linux (experimental):** get either `PMF-Studio-<version>-linux-x64.tar.gz` (unpack anywhere, run `./"PMF Studio"`) or
 `PMF-Studio-<version>-linux-x64.AppImage` (`chmod +x` it and run it; it keeps its settings and saved files beside the AppImage file, and
-updates itself by replacing that file, keeping its name). The 0.2 beta AppImage predates this: download the next one by hand once. Both are 64-bit and need a desktop with X11 or Wayland. The Linux ffmpeg is built from source by `packaging/linux/build_ffmpeg.sh`;
+updates itself by replacing that file, keeping its name). The 0.2 beta AppImage predates this: download the next one by hand once. Both are 64-bit and need a desktop with X11 or Wayland and a Linux from about 2018 on (glibc 2.28 or newer: Ubuntu 18.10+, Debian 10+, Fedora 29+, RHEL/Alma/Rocky 8+). The Linux ffmpeg is built from source by `packaging/linux/build_ffmpeg.sh`;
 its source and build script are attached to every release as `PMF-Studio-ffmpeg-source.tar.xz`.
 
 ## Status
@@ -54,6 +54,7 @@ distributions: all the tests pass there, the movie writer and the sound encoder 
 input, the finished tar.gz and AppImage pass their self-test, and the updater was tried with a release file on disk (not against a published
 release). The player's sound (PulseAudio or PipeWire) and dragging files onto the window (X11 drag and drop, through XWayland on Wayland) were tried there with a recorded sound check and a drag made by a program that follows the protocol, not with a real speaker or a real file manager.
 The Python used for the Linux files can only draw one plain bitmap font, so the Linux files carry a Tk built with font support (`packaging/linux/build_tk_xft.sh`) and the open font Selawik; the window was looked at in WSL, and follows the desktop's DPI setting where the desktop gives one, which could not be tried on a real high-resolution screen.
+The Linux files are built on AlmaLinux 8 (`packaging/linux/BUILD_ON_ALMALINUX8.txt`), so they need only glibc 2.28; the build checks that. The tar.gz was started (self-test, then the window for a minute) on AlmaLinux 8, Ubuntu 22.04, Debian 13 and Fedora 44 in WSL; drag and drop, sound and the launcher file were tried on one system (Ubuntu 24.04) only.
 
 The movie writer follows Sony's own muxer: pack timing, the video buffer (a pack waits until it fits the buffer the movie declares) and
 the encoder's buffer limit were matched against about 85 retail movies, whose streams it reproduces byte for byte. 49 of them come out with

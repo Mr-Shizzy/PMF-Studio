@@ -30,6 +30,16 @@ class ReleaseSourceTests(unittest.TestCase):
             if p.endswith(".patch"):
                 self.assertIn(p[:-len(".patch")], text, p)
 
+    def test_the_glibc_version_is_read_from_old_and_new_objdump_output(self):
+        build = load_build()
+        new = "0000 g    DF .text  0000 (GLIBC_2.2.5) memcpy\n0000 g    DF .text  0000 (GLIBC_2.38)  fmod\n0000 g DF .text 0000 (GLIBC_2.17) clock_gettime\n"
+        old = "0000 g    DF .text  0000  GLIBC_2.2.5 memcpy\n0000 g    DF .text  0000  GLIBC_2.28   fmod\n0000 g DF .text 0000 GLIBC_PRIVATE _dl_x\n"
+        self.assertEqual(build.highest_glibc(new), (2, 38))
+        self.assertEqual(build.highest_glibc(old), (2, 28))
+        self.assertEqual(build.highest_glibc("no version symbols here"), (0,))
+        self.assertGreater(build.highest_glibc(new), build.OLDEST_GLIBC)       # such a program would stop the build
+        self.assertLessEqual(build.highest_glibc(old), build.OLDEST_GLIBC)
+
     def test_the_personal_mail_pattern(self):
         build = load_build()
         self.assertTrue(build.PERSONAL_MAIL.search(b"contact someone.name@gmail.com for help"))

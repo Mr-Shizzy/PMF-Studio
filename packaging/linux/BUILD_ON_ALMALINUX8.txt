@@ -1,0 +1,36 @@
+Building the Linux release (AlmaLinux 8, in WSL on Windows or on any AlmaLinux 8 machine)
+==========================================================================================
+
+Why AlmaLinux 8
+---------------
+A program built on a Linux system asks for that system's C library (glibc) version or newer, and then refuses to start on older systems.
+AlmaLinux 8 has glibc 2.28, the baseline the Python world calls manylinux_2_28. Files built there run on Red Hat family 8 and newer
+(Rocky, Alma, RHEL), Debian 10 and newer, Ubuntu 18.10 and newer, Fedora 29 and newer, and everything after those.
+The same files built on Ubuntu 24.04 needed glibc 2.38 and did not start on Ubuntu 22.04 or Debian 12 (found 2026-11-09; the published 0.2 files
+needed only 2.17, because the fonts, X11 and Tk libraries of 0.3 were new). packaging/build_release.py now measures this at the end of every
+Linux build (objdump -T over every program and library in the folder) and stops when the answer is newer than 2.28.
+
+Steps
+-----
+1. In Windows:  wsl --install AlmaLinux-8 --no-launch      then work as root:  wsl -d AlmaLinux-8 -u root
+   (WSL adds the Windows folders to PATH: start the build with  export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin )
+2. Tools and header packages:
+     dnf -y install gcc make binutils tar xz gzip bzip2 which findutils file diffutils patch libX11-devel libXft-devel libXrender-devel \
+         libXext-devel fontconfig-devel freetype-devel xorg-x11-proto-devel libxcb pulseaudio-libs rpm
+3. The Python build environment: python-build-standalone 3.12 (the Python the release is packed with) and a virtual environment with
+   PyInstaller 6.22.3 in it, at $HOME/pmf_build/python and $HOME/pmf_build/venv (copy both folders from the machine that has them).
+   Set  export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt  (that Python looks for its certificates in the Debian place).
+4. The source of the release in a neutral folder, for example /var/tmp/pmf_src (no user name in the path: it ends up in nothing, but keep it clean),
+   plus the three helper builds, which are not made by this script: tools/ffmpeg and tools/atracdenc/bin/atracdenc (static programs, no glibc
+   need) and tools/tkdnd (packaging/linux/build_tkdnd.sh; needs glibc 2.4 only).
+5. In that folder:
+     bash packaging/linux/build_tk_xft.sh --install-into-python     # Tk 9.0.4 with fonts, built here (glibc 2.28) and put into the build Python
+     python packaging/build_release.py --no-zip                     # program folder, self-test, personal-string scan, glibc check
+     python packaging/build_release.py --zip-only                   # tar.gz
+     python packaging/build_release.py --appimage                   # AppImage
+   The libraries PyInstaller copies in (X11, Xft, FreeType, fontconfig, ...) come from this system, so they need glibc 2.28 at most, and their
+   licence texts are collected from the rpm packages into licenses/bundled-system-libraries.txt.
+6. Try the result on other systems (WSL can install Ubuntu-22.04, Debian, FedoraLinux-44, ...: wsl --install <name> --no-launch, then
+   unpack the tar.gz there and run it; remove a test system afterwards with  wsl --unregister <name> ).
+
+Debian and Ubuntu can still build with build_tk_xft.sh (it downloads pinned -dev packages there), but then the glibc check above stops the build.
