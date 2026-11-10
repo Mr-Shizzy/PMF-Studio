@@ -28,6 +28,7 @@ More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/s
 - Picks the part of a long movie that fits (a strip with a block you drag), keeps the best quality the size limit allows, shows a
   progress bar for everything that takes time, light and dark themes.
 - Drag and drop: drop a movie, EBOOT.PBP, PMF, sound or folder on the window (or on the exe) and it lands in the right box.
+  On Linux, drop files on the window, or on the `PMF Studio.desktop` launcher the program writes beside itself, or use *Open with*.
 - Self-test on the Options page, with a Copy report button that makes text for a bug report without your folder names or user name.
 - Stop button, checks before a job (free space, odd names, saving over your own file), working files cleaned up.
 - Updates itself when you ask: downloads the new release, verifies its SHA-256, tests it, swaps it in, and rolls back if that fails.
@@ -40,8 +41,8 @@ More: [gameboot built](docs/screenshots/gameboot-built.png), [EBOOT icon](docs/s
 program isn't signed: choose *More info*, then *Run anyway*. The release notes list the SHA-256 of every file.
 
 **Linux (experimental):** get either `PMF-Studio-<version>-linux-x64.tar.gz` (unpack anywhere, run `./"PMF Studio"`) or
-`PMF-Studio-<version>-linux-x64.AppImage` (`chmod +x` it and run it; it keeps its settings and saved files beside the AppImage file, and can't
-update itself). Both are 64-bit and need a desktop with X11 or Wayland. The Linux ffmpeg is built from source by `packaging/linux/build_ffmpeg.sh`;
+`PMF-Studio-<version>-linux-x64.AppImage` (`chmod +x` it and run it; it keeps its settings and saved files beside the AppImage file, and
+updates itself by replacing that file, keeping its name). The 0.2 beta AppImage predates this: download the next one by hand once. Both are 64-bit and need a desktop with X11 or Wayland. The Linux ffmpeg is built from source by `packaging/linux/build_ffmpeg.sh`;
 its source and build script are attached to every release as `PMF-Studio-ffmpeg-source.tar.xz`.
 
 ## Status

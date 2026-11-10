@@ -15,7 +15,7 @@ import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
 from . import VERSION, STAGE, REPO, jobs, settings, updater
-from . import dropfiles, paths, preflight
+from . import dropfiles, keepawake, launcher, paths, preflight
 from .paths import app_dir, data_dir, find_tool
 from .theme import T, S, set_scale, set_theme, mix
 from .widgets import Check, FitPicker, ProgressBar, ScrollArea, Segmented, Slider, TrimBar, STATE_COLORS, clock
@@ -1304,6 +1304,11 @@ class App(tk.Tk):
         lines.append("Dragging files onto the window: %s" % ("works" if not getattr(self, "drop_problem", None) else "not available (%s)" % scrub(str(self.drop_problem))))
         out = getattr(self.player, "audio", None) if self.player else None
         lines.append("Sound for the Player: %s" % ("not opened yet" if not self.player else ("ready (%s)" % type(out).__name__ if out else "no sound output found")))
+        if os.name != "nt" and getattr(sys, "frozen", False):
+            lines.append("Launcher file for dropping files on: %s" % ("not needed (running as an AppImage)" if os.environ.get("APPIMAGE") else
+                                                                       "present" if os.path.exists(os.path.join(app_dir(), launcher.NAME)) else "not written (is the folder read-only?)"))
+        lines.append("Keeping the PC awake during a job: %s" % keepawake.status())
+        lines.append("Lower priority for helper programs: %s" % ("yes (below normal)" if os.name == "nt" else "yes (nice 10)" if shutil.which("nice") else "not available (nice was not found)"))
         lines.append("Settings: theme %s, lower priority %s, updates on startup %s" % ("dark" if self.settings["dark"] else "light", self.settings["low_priority"], self.settings["auto_update"]))
         trace = getattr(self, "last_trace", "")
         lines.append("Last unexpected error:\n" + scrub(trace[-1500:]) if trace else "No unexpected errors in this run.")
@@ -1443,7 +1448,9 @@ class App(tk.Tk):
             return
         self.busy = True
         cli.CANCEL.clear()
-        cli.PRIORITY = 0x4000 if self.settings.get("low_priority", True) and os.name == "nt" else 0       # below normal: the PC stays usable
+        low = self.settings.get("low_priority", True)
+        cli.PRIORITY = 0x4000 if low and os.name == "nt" else 0       # below normal: the PC stays usable
+        cli.NICE = 10 if low and os.name != "nt" else 0               # (the same on Linux)
         self.go.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         self.stop_btn.pack(side="right", padx=(0, 6))
@@ -1461,9 +1468,9 @@ class App(tk.Tk):
             self.size_bar.pack_forget()
 
         def work():
+            awake = keepawake.KeepAwake()
             try:
-                if os.name == "nt":
-                    ctypes.windll.kernel32.SetThreadExecutionState(0x80000001)    # the PC doesn't go to sleep in the middle of a long job
+                awake.start()                                    # the PC doesn't go to sleep in the middle of a long job
                 func(v, tools, lambda line: self.q.put(("log", line)))
                 self.q.put(("done", v["out"]))
             except BuildError as e:
@@ -1472,8 +1479,7 @@ class App(tk.Tk):
                 self.last_trace = traceback.format_exc()
                 self.q.put(("error", "Something unexpected went wrong (%s: %s).\n\nOptions > Copy diagnostics gives you text to send with a bug report." % (type(e).__name__, e)))
             finally:
-                if os.name == "nt":
-                    ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+                awake.stop()
         self.worker = threading.Thread(target=work, daemon=True)
         self.worker.start()
 
@@ -1754,6 +1760,7 @@ def main():
         tempfile.tempdir = work
     else:                                                  # a read-only folder: use the system's temp folder instead of failing
         work = None
+    launcher.refresh(app_dir(), paths.asset("icon.png"))    # Linux: the launcher file that files can be dropped on (beside the program)
     try:
         App([a for a in sys.argv[1:] if not a.startswith("--")]).mainloop()
     finally:

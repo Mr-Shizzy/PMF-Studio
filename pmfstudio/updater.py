@@ -5,6 +5,9 @@
   that was announced -> close, swap the program's own files for the new ones with a small batch script that waits for this program to
   end, keeps the old files until the new version has started, and puts them back if the swap fails.
 
+A program running as an AppImage (one file, whose own folder is read-only) does the same with that one file: the new AppImage is downloaded and
+tested in a folder beside the old one, and a small script renames the two (old one kept as <name>.old until the new version has run).
+
 Settings, saved output and anything else the user put beside the program are never touched. Nothing here runs without the user's click
 (the program asks first), and a failure at any step leaves the installed version exactly as it was."""
 import hashlib
@@ -25,8 +28,9 @@ from . import VERSION, STAGE, REPO
 
 PREFIX = "https://github.com/%s/" % REPO
 WINDOWS = os.name == "nt"
-# each system has its own release file: a zip for Windows, a tar.gz for Linux (the AppImage is a separate download that replaces itself by hand)
+# each system has its own release file: a zip for Windows, a tar.gz for Linux; a program running as an AppImage updates to the AppImage file
 ASSET = re.compile(r"PMF-Studio-.+-win64\.zip" if WINDOWS else r"PMF-Studio-.+-linux-x64\.tar\.gz")
+APPIMAGE_ASSET = re.compile(r"PMF-Studio-.+-linux-x64\.AppImage")
 EXE = "PMF Studio.exe" if WINDOWS else "PMF Studio"
 HELPERS = ("ffmpeg.exe", "atracdenc.exe") if WINDOWS else ("ffmpeg", "atracdenc")
 PROGRAM_MAGIC = b"MZ" if WINDOWS else b"\x7fELF"
@@ -45,16 +49,32 @@ def ver(text):
     return tuple(int(x) for x in re.findall(r"\d+", text or "")[:3]) or (0,)
 
 
+def appimage_path():
+    """the .AppImage file this program was started from (None when it isn't running as an AppImage)"""
+    image = os.environ.get("APPIMAGE")
+    return os.path.abspath(image) if image and getattr(sys, "frozen", False) else None
+
+
 def pick_asset(info):
-    """the release zip and its SHA-256 from a GitHub release (json) -> dict(name, url, size, sha) or None"""
-    asset = next((a for a in info.get("assets", []) if ASSET.fullmatch(a.get("name", ""))), None)
+    """the release file of this system (an AppImage's own file when running as one) and its SHA-256 from a GitHub release (json)
+    -> dict(name, url, size, sha) or None"""
+    pattern = APPIMAGE_ASSET if appimage_path() else ASSET
+    asset = next((a for a in info.get("assets", []) if pattern.fullmatch(a.get("name", ""))), None)
     if not asset:
         return None
     url = asset.get("browser_download_url", "")
     sha = str(asset.get("digest", ""))[7:] if str(asset.get("digest", "")).startswith("sha256:") else ""
-    if not sha:
-        m = re.search(r"\b([0-9a-fA-F]{64})\b", info.get("body") or "")
-        sha = m.group(1) if m else ""
+    if not sha:                                                # the release notes: the hash on the line that names this file, else the only hash there is
+        body = info.get("body") or ""
+        found = re.compile(r"\b([0-9a-fA-F]{64})\b")
+        for line in body.splitlines():
+            m = found.search(line)
+            if m and asset["name"] in line:
+                sha = m.group(1)
+                break
+        else:
+            every = {h.lower() for h in found.findall(body)}
+            sha = every.pop() if len(every) == 1 else ""
     return dict(name=asset["name"], url=url, size=int(asset.get("size", 0)), sha=sha.lower())
 
 
@@ -180,15 +200,24 @@ def unpack(zip_path, staging):
     return new
 
 
-def selftest(new_dir, expect_tag, timeout=420, cancelled=lambda: False, tick=None):
+def clean_environment():
+    """this program's environment without the bookkeeping variables of a PyInstaller program and of an AppImage: a program started from
+    inside this one would otherwise believe it is this run (its folder, its AppImage file), which goes away or is another file"""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k not in ("_MEIPASS2", "APPDIR", "APPIMAGE", "ARGV0", "OWD")}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+def selftest(new_dir, expect_tag, timeout=420, cancelled=lambda: False, tick=None, program=None):
     """run the new program's own check in its staging folder: it must pass and name the announced version.
+    program: the file to run (the new AppImage; else the program inside new_dir). Either way the program writes its result into new_dir,
+    because that is where it lives (a program that runs as an AppImage keeps its files beside the AppImage file).
     tick(seconds so far), if given, is called about three times a second so a window can show that the check is still running"""
     result = os.path.join(new_dir, "selftest_result.txt")
     _remove(result)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
-    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    env = clean_environment()
     try:
-        proc = subprocess.Popen([os.path.join(new_dir, EXE), "--selftest"], cwd=new_dir, env=env, creationflags=0x08000000 if os.name == "nt" else 0)
+        proc = subprocess.Popen([program or os.path.join(new_dir, EXE), "--selftest"], cwd=new_dir, env=env, creationflags=0x08000000 if os.name == "nt" else 0)
     except OSError as e:
         raise UpdateError("The new version can't be started on this PC (%s), so it was not installed." % str(e)[:80])
     t0 = time.time()
@@ -356,6 +385,55 @@ exit 0
 """
 
 
+SWAP_APPIMAGE_SH = r"""#!/bin/sh
+# replaces the .AppImage file itself. The new file was tested in a folder beside it (same disk), so the swap is two renames. It keeps the
+# old file's name, so shortcuts to it still work, and keeps the old file as <name>.old until the new version has run for a few seconds.
+# The two paths arrive as environment variables, never as text in this file.
+NEW="$PMF_NEW"
+IMG="$PMF_APP"
+DIR="$(dirname "$IMG")"
+LOG="$DIR/update_log.txt"
+echo "[$(date)] waiting for PMF Studio (process @PID@) to close" >> "$LOG"
+waited=0
+while kill -0 @PID@ 2>/dev/null && [ "$waited" -lt 20 ]; do
+  sleep 1
+  waited=$((waited + 1))
+done
+start() {
+  cd "$DIR" && nohup "$IMG" > /dev/null 2>&1 &
+}
+restore() {
+  if [ -e "$IMG.old" ]; then
+    rm -f "$IMG"
+    mv "$IMG.old" "$IMG"
+  fi
+  echo "the old version was put back" >> "$LOG"
+  start
+  exit 1
+}
+rm -f "$IMG.old"
+if ! mv "$IMG" "$IMG.old" 2>> "$LOG"; then
+  echo "could not move the old AppImage aside; nothing was changed" >> "$LOG"
+  start
+  exit 1
+fi
+if ! mv "$NEW" "$IMG" 2>> "$LOG"; then
+  echo "could not put the new AppImage in its place; putting the old one back" >> "$LOG"
+  restore
+fi
+chmod 755 "$IMG"
+if [ ! -x "$IMG" ]; then
+  echo "the new AppImage can't be started; putting the old one back" >> "$LOG"
+  restore
+fi
+echo "swapped in; starting the new AppImage" >> "$LOG"
+rm -rf "$(dirname "$NEW")"
+start
+rm -f "$0"
+exit 0
+"""
+
+
 class SwapScript(str):
     """the path of the batch file; it also remembers the two folders the batch file needs (handed to it as environment variables)"""
     new_dir = app_dir = ""
@@ -382,11 +460,21 @@ def write_swap_script(new_dir, app_dir, pid=None):
     return script
 
 
+def write_appimage_swap_script(new_file, image, pid=None):
+    """the shell script that swaps the .AppImage file `image` for the tested `new_file` (see SWAP_APPIMAGE_SH)"""
+    pid = pid or os.getpid()
+    sh = os.path.join(tempfile.gettempdir(), "pmfstudio_swap_%d.sh" % pid)
+    with open(sh, "wb") as f:
+        f.write(SWAP_APPIMAGE_SH.replace("@PID@", str(pid)).encode("ascii"))     # LF line endings, plain ASCII
+    script = SwapScript(sh)
+    script.new_dir, script.app_dir = new_file, image                           # (here: the two files)
+    return script
+
+
 def swap_environment(script):
     """the environment the batch file runs in: this program's, without the bookkeeping variables of a PyInstaller program (a program relaunched
-    from inside itself would otherwise try to reuse this run's folder, which is gone), plus the two folders"""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI") and k != "_MEIPASS2"}
-    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    from inside itself would otherwise try to reuse this run's folder, which is gone) or of an AppImage, plus the two folders"""
+    env = clean_environment()
     env["PMF_NEW"], env["PMF_APP"] = script.new_dir, script.app_dir
     return env
 
@@ -411,14 +499,28 @@ def cleanup_after_update(app_dir):
     for n in PART_FILES:
         _remove(os.path.join(app_dir, n + ".old"))
     shutil.rmtree(os.path.join(app_dir, "update_staging"), ignore_errors=True)
+    image = appimage_path()
+    if image:                                                    # an AppImage keeps the old file beside itself, not inside
+        _remove(image + ".old")
+        shutil.rmtree(os.path.join(os.path.dirname(image), "update_staging"), ignore_errors=True)
 
 
 def can_install(app_dir):
     """None when the program can replace itself here; otherwise the reason, in plain words"""
     if not getattr(sys, "frozen", False):
         return "PMF Studio is running from its source files, which can't replace themselves."
-    if os.environ.get("APPIMAGE"):
-        return "PMF Studio is running as an AppImage, which is one file and can't replace itself. Download the new AppImage from the release page."
+    image = appimage_path()
+    if image:
+        folder = os.path.dirname(image)
+        if not os.path.isfile(image):
+            return "PMF Studio can't find its own AppImage file (%s), so it can't replace it." % os.path.basename(image)
+        try:
+            fd, name = tempfile.mkstemp(prefix=".update_", dir=folder)
+            os.close(fd)
+            os.remove(name)
+        except OSError:
+            return "PMF Studio can't write in the folder of its AppImage file (%s), so it can't replace the file there." % folder
+        return None
     try:
         fd, name = tempfile.mkstemp(prefix=".update_", dir=app_dir)
         os.close(fd)
@@ -437,8 +539,45 @@ def test_fraction(seconds):
     return UNPACK_DONE + (0.97 - UNPACK_DONE) * (1.0 - 0.5 ** (seconds / 25.0))
 
 
+def install_appimage(asset, expect_tag, image, progress, cancelled, opener):
+    """the update of a program running as an AppImage: download the new AppImage into a folder beside the old one, check it, run its own
+    --selftest from there, and hand back the script that swaps the two files. Nothing is changed until the script runs."""
+    folder = os.path.dirname(image)
+    need = (asset.get("size") or 100_000_000) * 2 + 100_000_000
+    if shutil.disk_usage(folder).free < need:
+        raise UpdateError("There isn't enough free space beside the AppImage for the update (about %d MB is needed)." % (need // 1_000_000))
+    staging = os.path.join(folder, "update_staging")
+    shutil.rmtree(staging, ignore_errors=True)
+    os.makedirs(staging)
+    new = os.path.join(staging, asset["name"])
+    progress("Step 1 of 3: downloading the update…", 0.0)
+    t0 = time.time()
+
+    def downloading(got, total):
+        speed = got / max(time.time() - t0, 0.001) / 1e6
+        progress("Step 1 of 3: downloading the update…  %d%%  (%d of %d MB, %.1f MB/s)" % (100 * got // total, got // 1_000_000, total // 1_000_000, speed), DOWNLOAD_PART * got / total)
+    try:
+        download(asset, new, downloading, cancelled, opener)
+        progress("Step 2 of 3: checking the file…", DOWNLOAD_PART)
+        with open(new, "rb") as f:
+            if f.read(4) != b"\x7fELF":
+                raise UpdateError("The update file isn't a program for this system, so it was not used.")
+        os.chmod(new, 0o755)
+        progress("Step 3 of 3: testing the new version…", UNPACK_DONE)
+        selftest(staging, expect_tag, cancelled=cancelled, program=new,
+                 tick=lambda secs: progress("Step 3 of 3: testing the new version…  %d s" % secs, test_fraction(secs)))
+    except UpdateError:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    progress("Ready: restarting into the new version", 1.0)
+    return write_appimage_swap_script(new, image)
+
+
 def install(asset, expect_tag, app_dir, work, progress=lambda text, fraction: None, cancelled=lambda: False, opener=None):
     """the whole update up to the swap -> the path of the swap script (not started yet). Raises UpdateError; nothing is changed until the script runs."""
+    image = appimage_path()
+    if image:
+        return install_appimage(asset, expect_tag, image, progress, cancelled, opener)
     free = shutil.disk_usage(app_dir).free
     if free < (asset.get("size") or 60_000_000) * 5 + 100_000_000:
         raise UpdateError("There isn't enough free space beside the program for the update (about %d MB is needed)." % (((asset.get("size") or 60_000_000) * 5 + 100_000_000) // 1_000_000))
@@ -467,11 +606,11 @@ def install(asset, expect_tag, app_dir, work, progress=lambda text, fraction: No
 def cli_update(argv):
     """PMF Studio.exe --update-from <zip> <sha256> [<version>]: the same update from a file on this PC (for offline PCs and for testing).
     Writes what happened to update_result.txt beside the program and starts the swap. -> exit code"""
-    from .paths import app_dir
+    from .paths import app_dir, data_dir
     i = argv.index("--update-from")
     zip_path, sha = argv[i + 1], argv[i + 2]
     tag = argv[i + 3] if len(argv) > i + 3 else ""
-    out = os.path.join(app_dir(), "update_result.txt")
+    out = os.path.join(data_dir(), "update_result.txt")                 # (an AppImage's own folder is read-only: its files go beside the AppImage file)
     try:
         problem = can_install(app_dir())
         if problem:
@@ -487,4 +626,11 @@ def cli_update(argv):
         return 0
     except UpdateError as e:
         open(out, "w", encoding="utf8").write("FAILED: %s\n" % e)
+        return 1
+    except Exception as e:                                                # the packaged program shows no console: whatever went wrong is written down
+        import traceback
+        try:
+            open(out, "w", encoding="utf8").write("FAILED: unexpected %s: %s\n%s" % (type(e).__name__, e, traceback.format_exc()[-1500:]))
+        except OSError:
+            pass
         return 1

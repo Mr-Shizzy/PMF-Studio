@@ -17,12 +17,18 @@ What is different from the Windows version:
     its libpulse-simple library). With no sound server the picture still plays, silently.
   - Dragging files onto the window uses the X11 drag-and-drop protocol, which file managers use (on Wayland desktops through XWayland).
     If it does not work on your desktop, use the Browse buttons, and tell us (Options > Run self-test > Copy report shows its state).
+  - Dropping files on the program's icon: file managers can't do that with a program file, so the program writes a launcher,
+    "PMF Studio.desktop", in its own folder (the first time it runs, and again if you move the folder). Drop files on it, or choose it under
+    "Open with", and the program starts with those files. You can also run   ./"PMF Studio" movie.pmf
+  - While a long job runs the computer is kept from sleeping (a lock taken with systemd-inhibit; the report in Options says
+    whether it worked on your system) and the helper programs run at a lower priority (nice 10), as on Windows.
   - The program needs a graphical desktop (X11 or Wayland with XWayland) and the usual system libraries (libX11).
 Everything that makes files (gameboot, C-Intro, EBOOT icon, shrinking game movies, AT3 tools, Extract) works as on Windows.
 
 Check for updates downloads a new version when there is one, checks it and tests it, then restarts into it. It asks first,
-keeps your settings and saved files, and puts the old version back if anything goes wrong. (The AppImage can't update itself: download
-the new AppImage by hand.)
+keeps your settings and saved files, and puts the old version back if anything goes wrong. The AppImage replaces its own file (the new
+file takes the old file's name; the old one is kept beside it until the new version has run for a few seconds).
+(An AppImage from before this was added, such as the 0.2 beta, can't: download the next AppImage by hand once.)
 
 Your saved files go to the Output folder beside the program unless you choose another one in Options.
 Settings are kept in "PMF Studio settings.json" beside the program. (For the AppImage: beside the .AppImage file.)

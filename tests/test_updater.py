@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 import zipfile
+from unittest import mock
 
 from pmfstudio import updater
 from pmfstudio.updater import UpdateError
@@ -305,24 +306,148 @@ class CommonSwapTests(unittest.TestCase):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
-    def test_an_appimage_cannot_replace_itself(self):
-        old = os.environ.get("APPIMAGE")
-        os.environ["APPIMAGE"] = "/somewhere/PMF-Studio.AppImage"
+class AppImageTests(unittest.TestCase):
+    """a program running as an AppImage replaces its own .AppImage file (beside it: the folder inside an AppImage is read-only)"""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp(prefix="pmf_appimg_")
+        self.image = os.path.join(self.d, "José PMF Studio.AppImage")
+        open(self.image, "wb").write(b"\x7fELF-old")
+        os.chmod(self.image, 0o755)
+        self.patches = [mock.patch.dict(os.environ, {"APPIMAGE": self.image}), mock.patch.object(sys, "frozen", True, create=True)]
+        for p in self.patches:
+            p.start()
+        self.new_bytes = b"\x7fELF" + b"new program" * 50
+        self.new_name = "PMF-Studio-9-beta-linux-x64.AppImage"
+        self.asset = dict(name=self.new_name, url=updater.PREFIX + "x.AppImage", size=len(self.new_bytes), sha=hashlib.sha256(self.new_bytes).hexdigest())
+        self.opener = lambda url: io.BytesIO(self.new_bytes)
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def test_it_is_found_from_the_environment_and_picks_the_appimage_file_of_a_release(self):
+        self.assertEqual(updater.appimage_path(), self.image)
+        info = {"assets": [{"name": "PMF-Studio-9-beta-linux-x64.tar.gz", "browser_download_url": "x", "size": 1, "digest": "sha256:" + "11" * 32},
+                           {"name": self.new_name, "browser_download_url": updater.PREFIX + "a", "size": 5, "digest": "sha256:" + "AB" * 32}]}
+        self.assertEqual(updater.pick_asset(info)["name"], self.new_name)                       # not the tar.gz
+        with mock.patch.dict(os.environ):
+            os.environ.pop("APPIMAGE")
+            self.assertIsNone(updater.appimage_path())
+            self.assertNotEqual((updater.pick_asset(info) or {}).get("name"), self.new_name)    # a program that is not an AppImage never picks one
+
+    def test_the_checksum_in_the_notes_is_the_one_on_the_line_of_the_file(self):
+        body = "`PMF-Studio-9-beta-win64.zip`  %s\n`PMF-Studio-9-beta-linux-x64.tar.gz`  %s\n`%s`  %s\n" % ("11" * 32, "22" * 32, self.new_name, "33" * 32)
+        info = {"assets": [{"name": self.new_name, "browser_download_url": "x", "size": 5}], "body": body}
+        self.assertEqual(updater.pick_asset(info)["sha"], "33" * 32)
+        info["body"] = "%s and %s" % ("11" * 32, "22" * 32)                                   # two hashes and none on the file's line: no guessing
+        self.assertEqual(updater.pick_asset(info)["sha"], "")
+
+    def test_it_can_replace_itself_when_its_folder_is_writable(self):
+        self.assertIsNone(updater.can_install(self.d))
+        os.remove(self.image)
+        self.assertIn("can't find", updater.can_install(self.d))
+
+    @unittest.skipIf(WINDOWS, "folder permissions work differently on Windows")
+    def test_it_says_so_when_the_folder_is_read_only(self):
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root can write anywhere")
+        os.chmod(self.d, 0o555)
         try:
-            frozen = getattr(sys, "frozen", None)
-            sys.frozen = True
-            try:
-                self.assertIn("AppImage", updater.can_install(tempfile.gettempdir()) or "")
-            finally:
-                if frozen is None:
-                    del sys.frozen
-                else:
-                    sys.frozen = frozen
+            self.assertIn("can't write", updater.can_install(self.d))
         finally:
-            if old is None:
-                del os.environ["APPIMAGE"]
-            else:
-                os.environ["APPIMAGE"] = old
+            os.chmod(self.d, 0o755)
+
+    def test_the_new_appimage_is_downloaded_checked_and_tested_beside_the_old_one(self):
+        tested = []
+        with mock.patch.object(updater, "selftest", lambda staging, tag, **kw: tested.append((staging, tag, kw.get("program")))):
+            script = updater.install(self.asset, "v9", self.d, self.d, opener=self.opener)
+        staging = os.path.join(self.d, "update_staging")
+        staged = os.path.join(staging, self.new_name)
+        self.assertEqual(tested, [(staging, "v9", staged)])                          # its own selftest, run from the file that will be installed
+        self.assertEqual(open(staged, "rb").read(), self.new_bytes)
+        self.assertEqual(open(self.image, "rb").read(), b"\x7fELF-old")              # nothing is replaced until the script runs
+        self.assertEqual((script.new_dir, script.app_dir), (staged, self.image))
+        os.remove(script)
+
+    def test_a_file_that_is_not_a_program_or_does_not_match_or_fails_its_test_is_never_installed(self):
+        for label, asset, opener in (("not a program", dict(self.asset, sha=hashlib.sha256(b"text only").hexdigest()), lambda u: io.BytesIO(b"text only")),
+                                     ("wrong checksum", dict(self.asset, sha="0" * 64), self.opener)):
+            with self.assertRaises(UpdateError, msg=label):
+                updater.install(asset, "", self.d, self.d, opener=opener)
+        def failing(*a, **k):
+            raise UpdateError("The new version failed its own check")
+        with mock.patch.object(updater, "selftest", failing), self.assertRaises(UpdateError):
+            updater.install(self.asset, "", self.d, self.d, opener=self.opener)
+        self.assertEqual(sorted(os.listdir(self.d)), ["José PMF Studio.AppImage"])      # the staging folder is gone, the old file untouched
+        self.assertEqual(open(self.image, "rb").read(), b"\x7fELF-old")
+
+    @unittest.skipIf(WINDOWS, "a shell script runs the program")
+    def test_the_selftest_runs_the_staged_file_and_reads_its_result_from_the_staging_folder(self):
+        staging = os.path.join(self.d, "stage")
+        os.makedirs(staging)
+        program = os.path.join(staging, "fake.AppImage")
+        open(program, "w").write('#!/bin/sh\n[ "$1" = "--selftest" ] || exit 2\n[ -z "$APPIMAGE" ] || exit 3\n'
+                                 'printf "2026-01-01\\nPMF Studio 9 beta\\nSELFTEST OK\\n" > "$(pwd)/selftest_result.txt"\n')
+        os.chmod(program, 0o755)
+        updater.selftest(staging, "v9", program=program)                               # the old run's AppImage variables are not passed on
+        self.assertFalse(os.path.exists(os.path.join(staging, "selftest_result.txt")))
+        with self.assertRaises(UpdateError):
+            updater.selftest(staging, "v10", program=program)                          # not the announced version
+
+    @unittest.skipIf(WINDOWS, "the shell script is the Linux swap")
+    def test_the_swap_replaces_the_file_keeps_its_name_starts_it_and_keeps_the_old_one_aside(self):
+        staging = os.path.join(self.d, "update_staging")
+        os.makedirs(staging)
+        new = os.path.join(staging, self.new_name)
+        open(new, "w").write('#!/bin/sh\necho started-new >> "%s/started.txt"\n' % self.d)
+        os.chmod(new, 0o644)                                                          # the script marks it startable itself
+        open(self.image, "w").write("#!/bin/sh\necho started-old >> \"%s/started.txt\"\n" % self.d)
+        script = updater.write_appimage_swap_script(new, self.image, pid=2 ** 22 + 12345)
+        self.assertNotIn(b"\r", open(script, "rb").read())
+        updater.run_swap(script)
+        for _ in range(100):
+            if not os.path.exists(script):
+                break
+            time.sleep(0.1)
+        time.sleep(0.5)
+        self.assertIn("started-new", open(os.path.join(self.d, "started.txt")).read())
+        self.assertIn("echo started-new", open(self.image).read())                    # the new file is in the old file's place, under its name
+        self.assertIn("started-old", open(self.image + ".old").read())                # the old one is kept until the new version has run
+        self.assertFalse(os.path.exists(staging))
+        updater.cleanup_after_update(os.path.join(self.d, "inside the image"))
+        self.assertFalse(os.path.exists(self.image + ".old"))
+        self.assertTrue(os.path.exists(self.image))
+
+    @unittest.skipIf(WINDOWS, "the shell script is the Linux swap")
+    def test_the_old_file_is_put_back_when_the_new_one_cannot_be_put_in_place(self):
+        new = os.path.join(self.d, "update_staging", "gone.AppImage")                 # the staged file is missing: the second rename fails
+        open(self.image, "w").write("#!/bin/sh\necho started-old >> \"%s/started.txt\"\n" % self.d)
+        script = updater.write_appimage_swap_script(new, self.image, pid=2 ** 22 + 12345)
+        updater.run_swap(script)
+        time.sleep(2.0)
+        self.assertIn("started-old", open(os.path.join(self.d, "started.txt")).read())
+        self.assertFalse(os.path.exists(self.image + ".old"))
+        self.assertIn("the old version was put back", open(os.path.join(self.d, "update_log.txt")).read())
+
+    def test_an_unexpected_failure_of_the_offline_update_is_written_to_the_result_file(self):
+        update = os.path.join(self.d, "u.AppImage")
+        open(update, "wb").write(self.new_bytes)
+        with mock.patch("pmfstudio.paths.data_dir", return_value=self.d), mock.patch("pmfstudio.paths.app_dir", return_value=self.d), \
+                mock.patch.object(updater, "install", side_effect=RuntimeError("boom")):
+            code = updater.cli_update(["x", "--update-from", update, self.asset["sha"]])
+        self.assertEqual(code, 1)
+        self.assertIn("unexpected RuntimeError: boom", open(os.path.join(self.d, "update_result.txt")).read())
+
+    def test_the_environment_for_the_new_program_forgets_this_run_of_the_appimage(self):
+        with mock.patch.dict(os.environ, {"APPDIR": "/tmp/.mount_x", "ARGV0": "PMF", "OWD": "/home", "_PYI_X": "1"}):
+            script = updater.write_appimage_swap_script("/a/new", self.image, pid=1)
+            os.remove(script)
+            env = updater.swap_environment(script)
+        for name in ("APPDIR", "APPIMAGE", "ARGV0", "OWD", "_PYI_X"):
+            self.assertNotIn(name, env)
+        self.assertEqual((env["PMF_NEW"], env["PMF_APP"]), ("/a/new", self.image))
 
 
 if __name__ == "__main__":

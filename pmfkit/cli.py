@@ -34,6 +34,17 @@ def fail(message):
 
 NOWND = 0x08000000 if os.name == "nt" else 0          # helper programs run without a console window popping up
 PRIORITY = 0                                           # the window sets 0x4000 (below normal) so a long job doesn't make the PC sluggish
+NICE = 0                                               # the same on Linux: the window sets 10, and a helper program is started through `nice -n 10`
+
+
+def niced(cmd):
+    """the command to start a helper program with: on Linux, behind `nice` when a lower priority was asked for (nice starts the program in its
+    own process, so stopping and waiting work as before; a system without nice just runs it at normal priority)"""
+    if NICE and os.name != "nt":
+        nice = shutil.which("nice")
+        if nice:
+            return [nice, "-n", str(int(NICE))] + list(cmd)
+    return list(cmd)
 
 
 class Cancelled(BuildError):
@@ -123,7 +134,7 @@ def run(cmd, env=None, track=None):
     check_cancel()
     if track and track[0] == "ffmpeg":
         cmd[1:1] = ["-progress", "pipe:1", "-nostats"]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, creationflags=NOWND | PRIORITY)
+    proc = subprocess.Popen(niced(cmd), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, creationflags=NOWND | PRIORITY)
     ACTIVE.append(proc)
     if CANCEL.is_set():                                # Stop was pressed while it was starting
         proc.terminate()
